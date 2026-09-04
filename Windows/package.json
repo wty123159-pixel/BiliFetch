@@ -1,6 +1,6 @@
 {
   "name": "bilifetch-windows",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "BiliFetch for Windows 10/11",
   "main": "main.js",
   "author": "BiliFetch",

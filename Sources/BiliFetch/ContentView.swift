@@ -8,8 +8,6 @@ struct ContentView: View {
     @State private var showBilibiliLogin = false
     @State private var showUpdate = false
     @State private var checkedUpdatesOnLaunch = false
-    @AppStorage("autoCheckUpdates") private var autoCheckUpdates = true
-    @AppStorage("updateManifestURL") private var updateManifestURL = ""
 
     var body: some View {
         ZStack {
@@ -67,12 +65,9 @@ struct ContentView: View {
             if phase == .available { showUpdate = true }
         }
         .onAppear {
-            if updateManifestURL.isEmpty { updateManifestURL = updater.bundledManifestURL }
             guard !checkedUpdatesOnLaunch else { return }
             checkedUpdatesOnLaunch = true
-            if autoCheckUpdates, !updateManifestURL.isEmpty {
-                updater.check(manifestURL: updateManifestURL, silent: true)
-            }
+            updater.check(silent: true)
         }
     }
 
@@ -345,26 +340,22 @@ struct ContentView: View {
 
             Divider()
 
-            Toggle(isOn: $autoCheckUpdates) {
+            HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("自动检查软件更新")
-                    Text("当前版本 v\(updater.currentVersion)")
+                    Text("启动时自动检查软件更新")
+                    Text("当前版本 v\(updater.currentVersion) · 有新版时才会提示")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            }
-
-            optionRow(title: "更新清单", subtitle: "固定 HTTPS 地址，供 macOS/Windows 共用") {
-                TextField("https://…/update.json", text: $updateManifestURL)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 275)
+                Spacer()
+                Image(systemName: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
             }
 
             HStack {
                 Spacer()
                 Button("立即检查", action: checkForUpdates)
                     .buttonStyle(.bordered)
-                    .disabled(updateManifestURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(18)
@@ -372,13 +363,9 @@ struct ContentView: View {
     }
 
     private func checkForUpdates() {
-        if updateManifestURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            showAdvanced = true
-            return
-        }
         showAdvanced = false
         showUpdate = true
-        updater.check(manifestURL: updateManifestURL)
+        updater.check()
     }
 
     private var updateSheet: some View {
@@ -433,7 +420,7 @@ struct ContentView: View {
                         .help(model.isBusy ? "请先结束当前下载任务" : "退出、替换应用并自动重新打开")
                 } else if updater.phase == .failed || updater.phase == .current {
                     Button("重新检查") {
-                        updater.check(manifestURL: updateManifestURL)
+                        updater.check()
                     }
                     .buttonStyle(.bordered)
                 }

@@ -26,7 +26,7 @@ contextBridge.exposeInMainWorld('biliFetch', {
   startLogin: () => ipcRenderer.invoke('login:start'),
   pollLogin: () => ipcRenderer.invoke('login:poll'),
   logout: () => ipcRenderer.invoke('login:logout'),
-  checkUpdate: (manifestURL) => ipcRenderer.invoke('update:check', manifestURL),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: (release) => ipcRenderer.invoke('update:download', release),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onToolProgress: (callback) => on('tools:progress', callback),

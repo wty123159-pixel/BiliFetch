@@ -1,3 +1,6 @@
 {
-  "manifestURL": "https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json"
+  "manifestURL": "https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json",
+  "manifestURLs": [
+    "https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json"
+  ]
 }

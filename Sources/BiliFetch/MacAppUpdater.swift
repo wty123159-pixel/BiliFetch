@@ -48,6 +48,8 @@ private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate
 
 @MainActor
 final class MacAppUpdater: ObservableObject {
+    private static let defaultManifestURL = "https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json"
+
     enum Phase: Equatable {
         case idle
         case checking
@@ -66,26 +68,43 @@ final class MacAppUpdater: ObservableObject {
     private var downloadSession: URLSession?
     private var downloadDelegate: UpdateDownloadDelegate?
     private var stagedAppURL: URL?
+    private let acceleratedDownloadRunner = ProcessRunner()
 
     var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
 
-    var bundledManifestURL: String {
-        guard let url = Bundle.main.url(forResource: "update-channel", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "" }
-        return object["manifestURL"] as? String ?? ""
+    private var bundledManifestURLs: [URL] {
+        var values: [String] = []
+        if let url = Bundle.main.url(forResource: "update-channel", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            values.append(contentsOf: object["manifestURLs"] as? [String] ?? [])
+            if let legacy = object["manifestURL"] as? String { values.append(legacy) }
+        }
+        values.append(Self.defaultManifestURL)
+        var seen = Set<String>()
+        return values.compactMap { value in
+            guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  url.scheme?.lowercased() == "https", seen.insert(url.absoluteString).inserted else { return nil }
+            return url
+        }
     }
 
-    func check(manifestURL: String, silent: Bool = false) {
-        let value = manifestURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), url.scheme?.lowercased() == "https" else {
+    func check(silent: Bool = false) {
+        guard phase != .checking, phase != .downloading else { return }
+        let sources = bundledManifestURLs
+        guard !sources.isEmpty else {
             if !silent { fail(AppUpdateError.notConfigured) }
             return
         }
         phase = .checking
         statusText = "正在检查更新…"
+        requestManifest(from: sources, index: 0, silent: silent)
+    }
+
+    private func requestManifest(from sources: [URL], index: Int, silent: Bool) {
+        let url = sources[index]
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -110,7 +129,10 @@ final class MacAppUpdater: ObservableObject {
                         self.statusText = "当前 v\(self.currentVersion) 已是最新版本。"
                     }
                 } catch {
-                    if silent {
+                    let next = index + 1
+                    if next < sources.count {
+                        self.requestManifest(from: sources, index: next, silent: silent)
+                    } else if silent {
                         self.phase = .idle
                         self.statusText = ""
                     } else {
@@ -135,7 +157,54 @@ final class MacAppUpdater: ObservableObject {
 
         phase = .downloading
         progress = 0
-        statusText = "正在下载更新包…"
+        statusText = "正在启动多连接更新下载…"
+        if startAcceleratedDownload(to: archive, release: release) { return }
+        startStandardDownload(to: archive, release: release)
+    }
+
+    private func startAcceleratedDownload(to archive: URL, release: AppUpdateRelease) -> Bool {
+        guard let aria2 = BackendLocator.locateExecutable(named: "aria2c") else { return false }
+        let arguments = [
+            "--allow-overwrite=true", "--auto-file-renaming=false", "--continue=true",
+            "--file-allocation=none", "--max-connection-per-server=8", "--split=8",
+            "--min-split-size=1M", "--max-tries=3", "--retry-wait=2",
+            "--connect-timeout=20", "--timeout=30", "--summary-interval=1",
+            "--show-console-readout=true", "--console-log-level=warn", "--enable-color=false",
+            "--user-agent=BiliFetch-macOS/\(currentVersion)",
+            "--dir=\(archive.deletingLastPathComponent().path)", "--out=\(archive.lastPathComponent)",
+            "--", release.url.absoluteString
+        ]
+        do {
+            try acceleratedDownloadRunner.start(
+                executable: aria2,
+                arguments: arguments,
+                onLine: { [weak self] line, _ in
+                    guard let self, let transfer = UpdateProgressParser.aria2(line) else { return }
+                    self.progress = transfer.fraction
+                    self.statusText = transfer.speed.isEmpty
+                        ? "正在多连接下载更新包…"
+                        : "正在多连接下载更新包 · \(transfer.speed)"
+                },
+                onFinish: { [weak self] exitCode in
+                    guard let self else { return }
+                    if exitCode == 0, FileManager.default.fileExists(atPath: archive.path) {
+                        self.verifyAndExtract(archive, release: release)
+                    } else {
+                        try? FileManager.default.removeItem(at: archive)
+                        try? FileManager.default.removeItem(at: URL(fileURLWithPath: archive.path + ".aria2"))
+                        self.statusText = "多连接下载不可用，正在切换标准下载…"
+                        self.startStandardDownload(to: archive, release: release)
+                    }
+                }
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func startStandardDownload(to archive: URL, release: AppUpdateRelease) {
+        statusText = "正在使用标准方式下载更新包…"
         let delegate = UpdateDownloadDelegate(
             destination: archive,
             progress: { [weak self] value in

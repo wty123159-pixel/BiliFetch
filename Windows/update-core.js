@@ -23,6 +23,24 @@ function validateHTTPSURL(value, label) {
   return url.toString();
 }
 
+function manifestURLs(channel, fallback) {
+  const raw = [
+    ...(Array.isArray(channel?.manifestURLs) ? channel.manifestURLs : []),
+    channel?.manifestURL,
+    fallback
+  ];
+  const seen = new Set();
+  return raw.flatMap((value) => {
+    if (!value) return [];
+    try {
+      const url = validateHTTPSURL(value, '更新清单地址');
+      if (seen.has(url)) return [];
+      seen.add(url);
+      return [url];
+    } catch { return []; }
+  });
+}
+
 function validateManifest(payload) {
   if (!payload || typeof payload !== 'object') throw new Error('更新清单格式无效。');
   if (!parseVersion(payload.version)) throw new Error('更新清单缺少有效版本号。');
@@ -40,4 +58,4 @@ function validateManifest(payload) {
   };
 }
 
-module.exports = { compareVersions, parseVersion, validateHTTPSURL, validateManifest };
+module.exports = { compareVersions, manifestURLs, parseVersion, validateHTTPSURL, validateManifest };

@@ -235,6 +235,13 @@ do {
     check(true, "rejects an insecure macOS update URL")
 }
 
+if let transfer = UpdateProgressParser.aria2("[#abc 80MiB/200MiB(40%) CN:8 DL:12MiB]") {
+    check(transfer.fraction == 0.4, "parses accelerated update percentage")
+    check(transfer.speed == "12MiB/s", "parses accelerated update speed")
+} else {
+    check(false, "parses accelerated update progress")
+}
+
 let callbackQueue = DispatchQueue(label: "BiliFetch.SelfTest.ProcessRunner")
 let runner = ProcessRunner(callbackQueue: callbackQueue)
 

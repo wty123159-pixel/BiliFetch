@@ -8,6 +8,27 @@ struct AppUpdateRelease: Equatable {
     let size: Int64
 }
 
+struct UpdateTransferProgress: Equatable {
+    let fraction: Double
+    let speed: String
+}
+
+enum UpdateProgressParser {
+    static func aria2(_ line: String) -> UpdateTransferProgress? {
+        let pattern = #"\(([0-9]{1,3})%\).*?DL:([^\s\]]+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        guard let match = expression.matches(in: line, range: range).last,
+              let percentRange = Range(match.range(at: 1), in: line),
+              let percent = Double(line[percentRange]) else { return nil }
+        let speed = Range(match.range(at: 2), in: line).map { String(line[$0]) } ?? ""
+        return UpdateTransferProgress(
+            fraction: min(max(percent / 100, 0), 1),
+            speed: speed.isEmpty || speed.hasSuffix("/s") ? speed : "\(speed)/s"
+        )
+    }
+}
+
 struct AppUpdateManifest: Decodable {
     struct Artifact: Decodable {
         let version: String?

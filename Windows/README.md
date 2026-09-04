@@ -4,7 +4,7 @@
 
 ## 使用
 
-1. 解压整个 `BiliFetch-Windows-x64-1.1.1.zip`，不要只复制其中的 `BiliFetch.exe`。
+1. 解压整个 `BiliFetch-Windows-x64-1.1.2.zip`，不要只复制其中的 `BiliFetch.exe`。
 2. 双击 `BiliFetch.exe`。
 3. 软件会自动检测并调用包内的 yt-dlp、FFmpeg、FFprobe 和 aria2，不需要联网安装环境或管理员权限。
 4. 粘贴链接并等待分集预览，选择保存位置和需要的分集，然后点击“开始下载”。只有组件被删除或损坏时，界面才会显示“修复组件”。
@@ -19,11 +19,13 @@
 ./scripts/build-windows.sh
 ```
 
-构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.1.zip`。
+构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.2.zip`。
 
 ## 在线升级发布
 
 Windows 1.1.0 起支持便携版应用内升级。更新包会先下载到当前用户的应用数据目录，SHA-256 校验通过后，用户点击“退出并升级”，程序才会替换应用文件并自动重启。`Tools`、登录 Cookie、设置与未完成下载任务都在用户数据目录，不会因升级丢失。
+
+Windows 1.1.2 起，更新清单地址完全内置且不在界面展示。软件每次启动自动检查一次；没有新版或检查失败时不会影响使用，发现新版才弹出确认窗口。安装包优先使用内置 aria2 的 8 连接下载，失败后自动切换标准下载。
 
 Windows 1.1.0 与 macOS 1.5.7 起共用一个长期不变、可公开访问的 HTTPS 清单地址：
 
@@ -39,20 +41,20 @@ https://github.com/你的用户名/BiliFetch/releases/latest/download/update.jso
 node scripts/create-release-manifest.mjs \
   --windows dist/BiliFetch-Windows-x64-1.2.0.zip \
   --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.2.0.zip \
-  --macos dist/BiliFetch-macOS-1.5.8.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.8.zip \
+  --macos dist/BiliFetch-macOS-1.5.9.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.9.zip \
   --notes release-notes.txt \
   --output dist/update.json
 ```
 
-把两个 ZIP 与 `update.json` 上传到同一次发布。所有启用了自动检查的客户端会收到各自平台的新版提示。
+把两个 ZIP 与 `update.json` 上传到同一次发布。客户端会在每次启动时检查并在发现新版时提示。
 
 1.0.0 本身没有升级客户端，因此现有 1.0.0 用户需要手动换到 1.1.0 一次；从 1.1.0 开始可直接在软件内升级。
 
 ## 第三方组件
 
 - yt-dlp：Unlicense
-- FFmpeg：GPL 构建，具体许可随其构建包提供
+- FFmpeg：LGPL 共享构建，具体许可随其构建包提供
 - aria2：GPL-2.0-or-later
 - Electron：MIT
 

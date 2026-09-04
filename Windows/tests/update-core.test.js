@@ -23,3 +23,13 @@ test('requires an HTTPS update feed and signed hash metadata', () => {
 test('rejects an update manifest without a valid checksum', () => {
   assert.throws(() => update.validateManifest({ version: '1.2.0', windows: { url: 'https://example.com/x.zip', sha256: 'bad' } }), /SHA-256/);
 });
+
+test('uses hidden bundled update sources with fallback and no duplicates', () => {
+  assert.deepEqual(update.manifestURLs({
+    manifestURLs: ['https://mirror.example.com/update.json', 'http://unsafe.example.com/update.json'],
+    manifestURL: 'https://mirror.example.com/update.json'
+  }, 'https://github.com/example/BiliFetch/releases/latest/download/update.json'), [
+    'https://mirror.example.com/update.json',
+    'https://github.com/example/BiliFetch/releases/latest/download/update.json'
+  ]);
+});

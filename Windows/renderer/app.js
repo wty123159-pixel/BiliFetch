@@ -41,16 +41,14 @@ function readSettings() {
     engine: $('#engine').value,
     concurrency: Number($('#concurrency').value),
     browser: $('#browser').value,
-    subtitles: $('#subtitles').checked,
-    autoCheckUpdates: $('#autoCheckUpdates').checked,
-    updateManifestURL: $('#updateManifestURL').value.trim()
+    subtitles: $('#subtitles').checked
   };
 }
 
 function applySettings(settings) {
   state.settings = {
     quality: 'best', engine: 'aria2', concurrency: 3, browser: 'none', subtitles: false,
-    autoCheckUpdates: true, updateManifestURL: '', ...settings
+    ...settings
   };
   $('#quality').value = state.settings.quality;
   $('#engine').value = state.settings.engine;
@@ -58,8 +56,6 @@ function applySettings(settings) {
   $('#concurrencyValue').textContent = state.settings.concurrency;
   $('#browser').value = state.settings.browser;
   $('#subtitles').checked = state.settings.subtitles;
-  $('#autoCheckUpdates').checked = state.settings.autoCheckUpdates;
-  $('#updateManifestURL').value = state.settings.updateManifestURL;
 }
 
 function selectedItems() {
@@ -258,19 +254,10 @@ async function beginLogin() {
 }
 
 async function checkForUpdates(manual = true) {
-  state.settings = readSettings();
-  const manifestURL = state.settings.updateManifestURL;
-  if (!manifestURL) {
-    if (manual) {
-      setNotice('在线更新尚未配置：请在高级设置中填写固定的更新清单 HTTPS 地址。', 'error');
-      $('#advancedDialog').showModal();
-    }
-    return;
-  }
   $('#updateButton').disabled = true;
   if (manual) setNotice('正在检查新版本…');
   try {
-    const result = await window.biliFetch.checkUpdate(manifestURL);
+    const result = await window.biliFetch.checkUpdate();
     if (!result.available) {
       if (manual) setNotice(`当前 v${result.currentVersion} 已是最新版本。`, 'success');
       return;
@@ -383,9 +370,7 @@ async function initialize() {
     renderPreview();
     setNotice('已恢复上次未完成任务，请检查勾选项目后点击“开始下载”续传。');
   }
-  if (state.settings.autoCheckUpdates && state.settings.updateManifestURL) {
-    setTimeout(() => checkForUpdates(false), 1800);
-  }
+  setTimeout(() => checkForUpdates(false), 1800);
 }
 
 initialize().catch((error) => setNotice(`初始化失败：${error.message}`, 'error'));

@@ -29,9 +29,7 @@ git push -u origin main
 4. 计算两个 ZIP 的 SHA-256，生成统一的 `update.json`。
 5. 创建 GitHub Release，并上传两个安装包和更新清单。
 
-当前本地构建包还不知道未来仓库用户名，所以源码中的 `Windows/update-channel.json` 暂时留空。不要把这个本地包作为正式的“在线升级起始版”长期分发。仓库创建后，从 Actions 运行第一次正式发布；工作流会把真实仓库地址写进 macOS 与 Windows 安装包。用户只需手动安装这次正式起始版，后续版本就能在软件内升级。
-
-已经安装本地测试包的用户，也可以在“高级设置”中手动填写上面的 `update.json` 地址，不必再次打包。
+Actions 会把真实仓库地址直接写进 macOS 与 Windows 安装包。更新地址不会显示在软件界面，也不需要用户填写；软件会在每次启动时检查一次，有新版才提示。
 
 如果 Actions 提示无权创建 Release，请到仓库 `Settings → Actions → General → Workflow permissions`，确认工作流具有读写权限。组织账号的权限也可能由组织管理员统一限制。
 
@@ -54,6 +52,8 @@ git push
 
 客户端不会接收代码仓库里的源文件，而是读取 Latest Release 中固定名称的 `update.json`。它比较当前平台版本后，下载清单中对应的 ZIP、核对 SHA-256，再退出、替换程序并重新打开；两个平台的账号登录、设置与未完成任务都保存在用户数据目录，不会随程序包替换而删除。
 
+如果主要用户无法稳定访问 GitHub，应把两个 ZIP 和 `update.json` 同步到国内对象存储或 CDN（例如阿里云 OSS、腾讯云 COS）。`Windows/update-channel.json` 支持 `manifestURLs` 数组，可以把国内清单放在第一位、GitHub 放在第二位，两个平台会依次尝试。只要清单中的安装包地址仍指向 GitHub，aria2 只能改善“可以访问但速度慢”的情况，不能解决网络完全不可达。
+
 不要删除或改名 `update.json`，也不要把测试版错误设置为 Latest；客户端始终通过 `releases/latest/download/update.json` 找最新版。
 
 ## 日常维护建议
@@ -71,11 +71,11 @@ git push
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.1.1.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.1.zip \
-  --macos dist/BiliFetch-macOS-1.5.8.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.8.zip \
-  --notes Updates/release-notes-1.1.0.md \
+  --windows dist/BiliFetch-Windows-x64-1.1.2.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.2.zip \
+  --macos dist/BiliFetch-macOS-1.5.9.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.9.zip \
+  --notes Updates/release-notes-2026-09-05-2.md \
   --output dist/update.json
 ```
 

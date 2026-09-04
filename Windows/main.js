@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, clipboard, dialog, ipcMain, powerMonitor, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, net, powerMonitor, powerSaveBlocker, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -9,12 +9,14 @@ const http = require('node:http');
 const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const extract = require('extract-zip');
 const QRCode = require('qrcode');
 const core = require('./core');
 const updateCore = require('./update-core');
 
 const APP_VERSION = require('./package.json').version;
+const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json';
 const TOOL_URLS = {
   ytdlp: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe',
   ffmpeg: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-02-13-13/ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-shared-9.0.zip',
@@ -142,6 +144,61 @@ function downloadFile(url, destination, label, onProgress = null) {
     };
     request(url);
   });
+}
+
+async function downloadFileWithSystemProxy(url, destination, label, onProgress) {
+  const response = await net.fetch(url, {
+    cache: 'no-store',
+    headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}` }
+  });
+  if (!response.ok || !response.body) throw new Error(`${label} 下载失败（HTTP ${response.status}）`);
+  const total = Number(response.headers.get('content-length')) || 0;
+  let received = 0;
+  const input = Readable.fromWeb(response.body);
+  const output = fs.createWriteStream(destination);
+  input.on('data', (chunk) => {
+    received += chunk.length;
+    onProgress({ label, percent: total ? Math.round(received / total * 100) : null, received, total });
+  });
+  await new Promise((resolve, reject) => {
+    input.once('error', reject);
+    output.once('error', reject);
+    output.once('finish', resolve);
+    input.pipe(output);
+  });
+}
+
+async function downloadUpdateFile(url, destination, label, onProgress) {
+  const tools = await locateTools();
+  if (tools.aria2) {
+    const argumentsList = [
+      '--allow-overwrite=true', '--auto-file-renaming=false', '--continue=true',
+      '--file-allocation=none', '--max-connection-per-server=8', '--split=8',
+      '--min-split-size=1M', '--max-tries=3', '--retry-wait=2',
+      '--connect-timeout=20', '--timeout=30', '--summary-interval=1',
+      '--show-console-readout=true', '--console-log-level=warn', '--enable-color=false',
+      `--user-agent=BiliFetch-Windows/${APP_VERSION}`,
+      `--dir=${path.dirname(destination)}`, `--out=${path.basename(destination)}`,
+      '--', url
+    ];
+    try {
+      const result = await runProcess(tools.aria2, argumentsList, {
+        onLine(line) {
+          const transfer = core.parseProgress(line);
+          if (!transfer) return;
+          const speed = transfer.speed && !transfer.speed.endsWith('/s') ? `${transfer.speed}/s` : transfer.speed;
+          onProgress({ label: speed ? `${label} · ${speed}` : label, percent: transfer.percent });
+        }
+      });
+      if (result.code === 0 && fs.existsSync(destination)) return;
+      throw new Error(`aria2 退出代码 ${result.code}`);
+    } catch {
+      await fsp.rm(destination, { force: true });
+      await fsp.rm(`${destination}.aria2`, { force: true });
+      onProgress({ label: '多连接下载不可用，正在切换标准下载', percent: null });
+    }
+  }
+  await downloadFileWithSystemProxy(url, destination, label, onProgress);
 }
 
 async function findFile(root, fileName) {
@@ -552,24 +609,30 @@ class AppUpdater {
     this.stagedRoot = null;
   }
 
-  async check(manifestURL) {
-    if (!String(manifestURL || '').trim()) return { configured: false, currentVersion: APP_VERSION };
-    const url = updateCore.validateHTTPSURL(manifestURL, '更新清单地址');
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(20000),
-      cache: 'no-store',
-      headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}`, Accept: 'application/json' }
-    });
-    if (!response.ok) throw new Error(`更新服务器返回 HTTP ${response.status}`);
-    const release = updateCore.validateManifest(await response.json());
-    const result = {
-      configured: true,
-      available: updateCore.compareVersions(release.version, APP_VERSION) > 0,
-      currentVersion: APP_VERSION,
-      release
-    };
-    this.available = result.available ? release : null;
-    return result;
+  async check() {
+    const channel = await readJSON(path.join(__dirname, 'update-channel.json'), {});
+    const sources = updateCore.manifestURLs(channel, DEFAULT_UPDATE_MANIFEST_URL);
+    let lastError = null;
+    for (const url of sources) {
+      try {
+        const response = await net.fetch(url, {
+          signal: AbortSignal.timeout(20000),
+          cache: 'no-store',
+          headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}`, Accept: 'application/json' }
+        });
+        if (!response.ok) throw new Error(`更新服务器返回 HTTP ${response.status}`);
+        const release = updateCore.validateManifest(await response.json());
+        const result = {
+          configured: true,
+          available: updateCore.compareVersions(release.version, APP_VERSION) > 0,
+          currentVersion: APP_VERSION,
+          release
+        };
+        this.available = result.available ? release : null;
+        return result;
+      } catch (error) { lastError = error; }
+    }
+    throw lastError || new Error('暂时无法连接更新服务器。');
   }
 
   async download(release = this.available) {
@@ -585,7 +648,7 @@ class AppUpdater {
     const extracted = path.join(updateDir, 'extracted');
     await fsp.rm(updateDir, { recursive: true, force: true });
     await fsp.mkdir(updateDir, { recursive: true });
-    await downloadFile(checked.url, archive, '应用更新', (progress) => send('update:progress', progress));
+    await downloadUpdateFile(checked.url, archive, '应用更新', (progress) => send('update:progress', progress));
     send('update:progress', { label: '正在校验更新包', percent: null });
     const digest = await sha256File(archive);
     if (digest !== checked.sha256) {
@@ -686,17 +749,11 @@ async function createWindow() {
 }
 
 async function loadSettings() {
-  const channel = await readJSON(path.join(__dirname, 'update-channel.json'), {});
   const saved = await readJSON(userDataPath('settings.json'), {});
   const defaults = {
-    quality: 'best', engine: 'aria2', concurrency: 3, browser: 'none', subtitles: false,
-    autoCheckUpdates: true, updateManifestURL: String(channel.manifestURL || '')
+    quality: 'best', engine: 'aria2', concurrency: 3, browser: 'none', subtitles: false
   };
-  return {
-    ...defaults,
-    ...saved,
-    updateManifestURL: String(saved.updateManifestURL || channel.manifestURL || '')
-  };
+  return Object.fromEntries(Object.keys(defaults).map((key) => [key, saved[key] ?? defaults[key]]));
 }
 
 function registerIPC() {
@@ -728,7 +785,7 @@ function registerIPC() {
   ipcMain.handle('login:start', startQRLogin);
   ipcMain.handle('login:poll', pollQRLogin);
   ipcMain.handle('login:logout', async () => { qrSession = null; await fsp.rm(userDataPath('bilibili-cookies.txt'), { force: true }); return true; });
-  ipcMain.handle('update:check', (_, manifestURL) => appUpdater.check(manifestURL));
+  ipcMain.handle('update:check', () => appUpdater.check());
   ipcMain.handle('update:download', (_, release) => appUpdater.download(release));
   ipcMain.handle('update:install', () => appUpdater.install());
 }
