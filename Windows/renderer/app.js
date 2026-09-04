@@ -303,7 +303,9 @@ async function checkForUpdates(manual = true) {
     $('#newVersion').textContent = `v${result.release.version}`;
     $('#versionComparison').textContent = `当前版本 v${result.currentVersion}`;
     $('#updateNotes').textContent = result.release.notes || '本次更新暂无说明。';
-    $('#updateStatus').textContent = '可以下载更新包；下载任务和组件不会丢失。';
+    $('#updateStatus').textContent = result.release.delta
+      ? '可用小体积增量更新；异常时会自动改用完整包。'
+      : '可以下载完整更新包；下载任务和组件不会丢失。';
     $('#updateProgress').classList.add('hidden');
     $('#updateProgressBar').style.width = '0%';
     $('#downloadUpdateButton').classList.remove('hidden');

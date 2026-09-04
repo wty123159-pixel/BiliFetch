@@ -194,6 +194,15 @@ do {
     check(false, "parses collection metadata: \(error.localizedDescription)")
 }
 
+do {
+    let binaryPlanJSON = #"{"formatVersion":1,"platform":"macos","fromVersion":"1.5.6","toVersion":"1.5.7","files":[{"path":"Contents/MacOS/BiliFetch","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","size":12,"mode":493,"patch":{"source":"patches/000001.bin","baseSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","baseSize":20,"dataSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","dataSize":4,"operations":[{"type":"copy","offset":0,"length":8},{"type":"data","offset":0,"length":4}]}}],"deletePaths":[]}"#.data(using: .utf8)!
+    let plan = try JSONDecoder().decode(AppDeltaPlan.self, from: binaryPlanJSON)
+    try plan.validate(currentVersion: "1.5.6", targetVersion: "1.5.7")
+    check(plan.files.first?.patch?.operations.count == 2, "accepts a bounded macOS binary delta plan")
+} catch {
+    check(false, "validates a macOS binary delta plan: \(error.localizedDescription)")
+}
+
 let bilibiliViewJSON = #"{"code":0,"message":"0","data":{"bvid":"BVdemo","title":"API 分集","pic":"http://i0.hdslb.com/main.jpg","pages":[{"page":1,"part":"第一集","duration":61,"first_frame":"//i0.hdslb.com/first.jpg"},{"page":2,"part":"第二集","duration":125,"first_frame":""}]}}"#.data(using: .utf8)!
 
 do {
@@ -255,14 +264,34 @@ do {
     let equalComparison = try AppVersion.compare("v1.5.7", "1.5.7")
     check(newerComparison == .orderedDescending, "detects a newer macOS version")
     check(equalComparison == .orderedSame, "accepts an optional version prefix")
-    let updateJSON = #"{"version":"1.1.0","notes":"同步更新","windows":{"url":"https://example.com/win.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":100},"macos":{"version":"1.5.7","url":"https://example.com/mac.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":200}}"#.data(using: .utf8)!
+    let updateJSON = #"{"schemaVersion":2,"version":"1.1.0","notes":"同步更新","windows":{"url":"https://example.com/win.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":100},"macos":{"version":"1.5.7","url":"https://example.com/mac.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":200,"deltas":[{"fromVersion":"1.5.6","url":"https://example.com/mac-delta.zip","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","size":20}]}}"#.data(using: .utf8)!
     let manifest = try JSONDecoder().decode(AppUpdateManifest.self, from: updateJSON)
-    let release = try manifest.macOSRelease()
+    let release = try manifest.macOSRelease(currentVersion: "1.5.6")
     check(release.version == "1.5.7", "reads the platform-specific macOS version")
     check(release.url.scheme == "https", "requires an HTTPS macOS update package")
     check(release.sha256.count == 64, "requires a full macOS SHA-256")
+    check(release.delta?.fromVersion == "1.5.6", "selects an exact-version macOS delta")
+    check(release.preferredAsset.kind == .delta, "prefers a matching incremental package")
+    let fallback = try manifest.macOSRelease(currentVersion: "1.5.5")
+    check(fallback.delta == nil && fallback.preferredAsset.kind == .full, "falls back to the full package without an exact delta")
 } catch {
     check(false, "parses the shared cross-platform update manifest: \(error.localizedDescription)")
+}
+
+do {
+    let plan = AppDeltaPlan(
+        formatVersion: 1,
+        platform: "macos",
+        fromVersion: "1.5.6",
+        toVersion: "1.5.7",
+        files: [.init(path: "Contents/MacOS/BiliFetch", sha256: String(repeating: "d", count: 64), size: 10, mode: 0o755, patch: nil)],
+        deletePaths: ["Contents/Resources/obsolete.txt"]
+    )
+    try plan.validate(currentVersion: "1.5.6", targetVersion: "1.5.7")
+    check(true, "accepts a safe macOS delta file plan")
+    check(!AppDeltaPlan.isSafeRelativePath("../outside"), "rejects incremental path traversal")
+} catch {
+    check(false, "validates a safe macOS delta file plan: \(error.localizedDescription)")
 }
 
 do {

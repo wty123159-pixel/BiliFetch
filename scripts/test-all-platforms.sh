@@ -14,6 +14,7 @@ if [[ -z "$PNPM_BIN" || -z "$NODE_BIN" ]]; then
 fi
 
 "$PROJECT_DIR/scripts/run-tests.sh"
+"$NODE_BIN" --test "$PROJECT_DIR/scripts/tests/"*.test.mjs
 
 cd "$PROJECT_DIR/Windows"
 "$PNPM_BIN" install --frozen-lockfile --config.node-linker=hoisted

@@ -27,13 +27,15 @@ Windows 1.1.0 起支持便携版应用内升级。更新包会先下载到当前
 
 Windows 1.1.2 起，更新清单地址完全内置且不在界面展示。软件每次启动自动检查一次；没有新版或检查失败时不会影响使用，发现新版才弹出确认窗口。安装包优先使用内置 aria2 的 8 连接下载，失败后自动切换标准下载。
 
+Windows 1.1.3 起支持文件级增量升级。只有清单中存在与当前版本精确匹配的增量包时才使用；版本不匹配、下载失败、SHA-256 不一致或增量文件校验失败时，会自动改用完整 ZIP。安装前会在用户数据目录生成完整的待替换副本，替换失败则恢复旧程序，设置、Cookie 和下载任务不受影响。
+
 Windows 1.1.0 与 macOS 1.5.7 起共用一个长期不变、可公开访问的 HTTPS 清单地址：
 
 ```text
 https://github.com/你的用户名/BiliFetch/releases/latest/download/update.json
 ```
 
-仓库根目录的 `.github/workflows/release.yml` 会在发布时自动写入该地址、测试并构建两个平台、计算校验值、生成统一的 `update.json`，然后将两个 ZIP 和清单上传到同一个 GitHub Release。完整步骤见根目录的 `GITHUB_RELEASE_GUIDE.md`。
+仓库根目录的 `.github/workflows/release.yml` 会在发布时自动写入该地址、测试并构建两个平台、下载上一版完整包进行比较、生成可用的增量包与统一的 `update.json`，然后把完整包、增量包和清单上传到同一个 GitHub Release。完整步骤见根目录的 `GITHUB_RELEASE_GUIDE.md`。
 
 如果不使用自动工作流，也可以手动构建两个平台并生成统一清单：
 

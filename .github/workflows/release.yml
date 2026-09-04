@@ -39,6 +39,16 @@ jobs:
           UPDATE_URL: https://github.com/${{ github.repository }}/releases/latest/download/update.json
         run: node scripts/configure-update-channel.mjs "$UPDATE_URL"
 
+      - name: Download the previous full release for delta comparison
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/previous-release
+          gh release download \
+            --dir build/previous-release \
+            --pattern 'BiliFetch-macOS-[0-9]*.zip' \
+            --pattern 'BiliFetch-Windows-x64-[0-9]*.zip' || true
+
       - name: Test both platforms
         run: |
           chmod +x scripts/*.sh
@@ -49,6 +59,29 @@ jobs:
           scripts/build-app.sh
           PNPM_BIN="$(command -v pnpm)" NODE_BIN="$(command -v node)" scripts/build-windows.sh
 
+      - name: Create incremental update packages when a previous release exists
+        run: |
+          PREV_MAC="$(find build/previous-release -maxdepth 1 -name 'BiliFetch-macOS-[0-9]*.zip' | sort | tail -n 1)"
+          PREV_WIN="$(find build/previous-release -maxdepth 1 -name 'BiliFetch-Windows-x64-[0-9]*.zip' | sort | tail -n 1)"
+          NEW_MAC="$(find dist -maxdepth 1 -name 'BiliFetch-macOS-[0-9]*.zip' | sort | tail -n 1)"
+          NEW_WIN="$(find dist -maxdepth 1 -name 'BiliFetch-Windows-x64-[0-9]*.zip' | sort | tail -n 1)"
+          if [ -n "$PREV_MAC" ] && [ -n "$NEW_MAC" ]; then
+            FROM="$(basename "$PREV_MAC" | sed -E 's/BiliFetch-macOS-([0-9.]+)\.zip/\1/')"
+            TO="$(basename "$NEW_MAC" | sed -E 's/BiliFetch-macOS-([0-9.]+)\.zip/\1/')"
+            if [ "$FROM" != "$TO" ]; then
+              node scripts/create-delta-package.mjs --platform macos --from "$PREV_MAC" --to "$NEW_MAC" \
+                --output "dist/BiliFetch-macOS-delta-$FROM-to-$TO.zip"
+            fi
+          fi
+          if [ -n "$PREV_WIN" ] && [ -n "$NEW_WIN" ]; then
+            FROM="$(basename "$PREV_WIN" | sed -E 's/BiliFetch-Windows-x64-([0-9.]+)\.zip/\1/')"
+            TO="$(basename "$NEW_WIN" | sed -E 's/BiliFetch-Windows-x64-([0-9.]+)\.zip/\1/')"
+            if [ "$FROM" != "$TO" ]; then
+              node scripts/create-delta-package.mjs --platform windows --from "$PREV_WIN" --to "$NEW_WIN" \
+                --output "dist/BiliFetch-Windows-x64-delta-$FROM-to-$TO.zip"
+            fi
+          fi
+
       - name: Create shared update manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -56,17 +89,27 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           printf '%s\n' "$RELEASE_NOTES" > dist/release-notes.txt
-          WIN_ZIP="$(find dist -maxdepth 1 -name 'BiliFetch-Windows-x64-*.zip' | sort | tail -n 1)"
-          MAC_ZIP="$(find dist -maxdepth 1 -name 'BiliFetch-macOS-*.zip' | sort | tail -n 1)"
+          WIN_ZIP="$(find dist -maxdepth 1 -name 'BiliFetch-Windows-x64-[0-9]*.zip' | sort | tail -n 1)"
+          MAC_ZIP="$(find dist -maxdepth 1 -name 'BiliFetch-macOS-[0-9]*.zip' | sort | tail -n 1)"
           WIN_NAME="$(basename "$WIN_ZIP")"
           MAC_NAME="$(basename "$MAC_ZIP")"
-          node scripts/create-release-manifest.mjs \
-            --windows "$WIN_ZIP" \
-            --windows-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$WIN_NAME" \
-            --macos "$MAC_ZIP" \
-            --macos-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$MAC_NAME" \
-            --notes dist/release-notes.txt \
+          ARGS=(
+            --windows "$WIN_ZIP"
+            --windows-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$WIN_NAME"
+            --macos "$MAC_ZIP"
+            --macos-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$MAC_NAME"
+            --notes dist/release-notes.txt
             --output dist/update.json
+          )
+          WIN_DELTA="$(find dist -maxdepth 1 -name 'BiliFetch-Windows-x64-delta-*.zip' | sort | tail -n 1)"
+          MAC_DELTA="$(find dist -maxdepth 1 -name 'BiliFetch-macOS-delta-*.zip' | sort | tail -n 1)"
+          if [ -n "$WIN_DELTA" ]; then
+            ARGS+=(--windows-delta "$WIN_DELTA" --windows-delta-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$(basename "$WIN_DELTA")")
+          fi
+          if [ -n "$MAC_DELTA" ]; then
+            ARGS+=(--macos-delta "$MAC_DELTA" --macos-delta-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$(basename "$MAC_DELTA")")
+          fi
+          node scripts/create-release-manifest.mjs "${ARGS[@]}"
 
       - name: Publish GitHub Release
         env:

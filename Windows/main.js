@@ -618,6 +618,55 @@ async function sha256File(file) {
   });
 }
 
+function safeUpdateChild(root, relativePath) {
+  if (!updateCore.isSafeRelativePath(relativePath)) throw new Error('增量包包含不安全的文件路径。');
+  const normalizedRoot = path.resolve(root);
+  const candidate = path.resolve(normalizedRoot, ...relativePath.split('/'));
+  if (!candidate.startsWith(`${normalizedRoot}${path.sep}`)) throw new Error('增量包文件超出应用目录。');
+  return candidate;
+}
+
+async function applyBinaryUpdatePatch(patch, dataFile, baseFile) {
+  const [baseInfo, dataInfo] = await Promise.all([fsp.stat(baseFile), fsp.stat(dataFile)]);
+  if (!baseInfo.isFile() || !dataInfo.isFile() || baseInfo.size !== patch.baseSize || dataInfo.size !== patch.dataSize ||
+      await sha256File(baseFile) !== patch.baseSha256 || await sha256File(dataFile) !== patch.dataSha256) {
+    throw new Error('二进制补丁的基础文件或数据校验失败。');
+  }
+  const temporary = `${baseFile}.bilifetch-patch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  let baseHandle;
+  let dataHandle;
+  let outputHandle;
+  try {
+    try {
+      baseHandle = await fsp.open(baseFile, 'r');
+      dataHandle = await fsp.open(dataFile, 'r');
+      outputHandle = await fsp.open(temporary, 'wx');
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      for (const operation of patch.operations) {
+        const input = operation.type === 'copy' ? baseHandle : dataHandle;
+        let position = operation.offset;
+        let remaining = operation.length;
+        while (remaining > 0) {
+          const count = Math.min(remaining, buffer.length);
+          const { bytesRead } = await input.read(buffer, 0, count, position);
+          if (bytesRead !== count) throw new Error('二进制补丁数据不完整。');
+          await outputHandle.write(buffer, 0, bytesRead, null);
+          position += bytesRead;
+          remaining -= bytesRead;
+        }
+      }
+      await outputHandle.sync();
+    } finally {
+      await Promise.allSettled([baseHandle?.close(), dataHandle?.close(), outputHandle?.close()]);
+    }
+    await fsp.rm(baseFile, { force: true });
+    await fsp.rename(temporary, baseFile);
+  } catch (error) {
+    await fsp.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
 class AppUpdater {
   constructor() {
     this.available = null;
@@ -636,7 +685,7 @@ class AppUpdater {
           headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}`, Accept: 'application/json' }
         });
         if (!response.ok) throw new Error(`更新服务器返回 HTTP ${response.status}`);
-        const release = updateCore.validateManifest(await response.json());
+        const release = updateCore.validateManifest(await response.json(), APP_VERSION);
         const result = {
           configured: true,
           available: updateCore.compareVersions(release.version, APP_VERSION) > 0,
@@ -656,27 +705,87 @@ class AppUpdater {
       version: release.version,
       notes: release.notes,
       publishedAt: release.publishedAt,
-      windows: { url: release.url, sha256: release.sha256, size: release.size }
-    });
+      windows: {
+        url: release.url, sha256: release.sha256, size: release.size,
+        deltas: release.delta ? [release.delta] : []
+      }
+    }, APP_VERSION);
     const updateDir = userDataPath('Updates', checked.version);
-    const archive = path.join(updateDir, 'BiliFetch-update.zip');
-    const extracted = path.join(updateDir, 'extracted');
     await fsp.rm(updateDir, { recursive: true, force: true });
     await fsp.mkdir(updateDir, { recursive: true });
-    await downloadUpdateFile(checked.url, archive, '应用更新', (progress) => send('update:progress', progress));
-    send('update:progress', { label: '正在校验更新包', percent: null });
-    const digest = await sha256File(archive);
-    if (digest !== checked.sha256) {
+    const fullAsset = { kind: 'full', url: checked.url, sha256: checked.sha256, size: checked.size };
+    const deltaAsset = checked.delta ? { kind: 'delta', ...checked.delta } : null;
+    try {
+      this.stagedRoot = await this.downloadAndStage(deltaAsset || fullAsset, checked, updateDir);
+    } catch (error) {
+      if (!deltaAsset) throw error;
+      send('update:progress', { label: '增量更新不可用，正在改用完整更新包', percent: null });
       await fsp.rm(updateDir, { recursive: true, force: true });
-      throw new Error('更新包 SHA-256 校验失败，已删除可疑文件。');
+      await fsp.mkdir(updateDir, { recursive: true });
+      this.stagedRoot = await this.downloadAndStage(fullAsset, checked, updateDir);
     }
-    await extract(archive, { dir: extracted });
-    const executable = await findFile(extracted, 'BiliFetch.exe');
-    if (!executable) throw new Error('更新包中没有找到 BiliFetch.exe。');
-    this.stagedRoot = path.dirname(executable);
     this.available = checked;
     send('update:progress', { label: '更新包已就绪', percent: 100 });
     return { ready: true, version: checked.version };
+  }
+
+  async downloadAndStage(asset, release, updateDir) {
+    const archive = path.join(updateDir, asset.kind === 'delta' ? 'BiliFetch-delta-update.zip' : 'BiliFetch-full-update.zip');
+    const extracted = path.join(updateDir, asset.kind === 'delta' ? 'delta-extracted' : 'full-extracted');
+    const label = asset.kind === 'delta' ? '增量应用更新' : '完整应用更新';
+    await downloadUpdateFile(asset.url, archive, label, (progress) => send('update:progress', progress));
+    send('update:progress', { label: `正在校验${label}`, percent: null });
+    const digest = await sha256File(archive);
+    if (digest !== asset.sha256) {
+      await fsp.rm(archive, { force: true });
+      throw new Error('更新包 SHA-256 校验失败，已删除可疑文件。');
+    }
+    await extract(archive, { dir: extracted });
+    if (asset.kind === 'delta') return this.stageDelta(extracted, release, updateDir);
+    const executable = await findFile(extracted, 'BiliFetch.exe');
+    if (!executable) throw new Error('更新包中没有找到 BiliFetch.exe。');
+    return path.dirname(executable);
+  }
+
+  async stageDelta(extracted, release, updateDir) {
+    if (process.platform !== 'win32' || !app.isPackaged) throw new Error('开发运行模式不能应用增量更新。');
+    const planFile = await findFile(extracted, 'delta.json');
+    if (!planFile) throw new Error('增量包缺少 delta.json。');
+    const plan = updateCore.validateDeltaPlan(await readJSON(planFile, null), APP_VERSION, release.version);
+    const payload = path.join(path.dirname(planFile), 'payload');
+    const target = path.dirname(process.execPath);
+    const staged = path.join(updateDir, 'staged', 'BiliFetch-win32-x64');
+    await fsp.rm(staged, { recursive: true, force: true });
+    await fsp.mkdir(path.dirname(staged), { recursive: true });
+    await fsp.cp(target, staged, { recursive: true, force: true, errorOnExist: false });
+
+    for (const relativePath of plan.deletePaths) {
+      await fsp.rm(safeUpdateChild(staged, relativePath), { recursive: true, force: true });
+    }
+    for (const file of plan.files) {
+      const destination = safeUpdateChild(staged, file.path);
+      await fsp.mkdir(path.dirname(destination), { recursive: true });
+      if (file.patch) {
+        const patchData = safeUpdateChild(payload, file.patch.source);
+        await applyBinaryUpdatePatch(file.patch, patchData, destination);
+      } else {
+        const source = safeUpdateChild(payload, file.path);
+        const sourceInfo = await fsp.stat(source);
+        if (!sourceInfo.isFile() || sourceInfo.size !== file.size || await sha256File(source) !== file.sha256) {
+          throw new Error(`增量文件校验失败：${file.path}`);
+        }
+        await fsp.rm(destination, { recursive: true, force: true });
+        await fsp.copyFile(source, destination);
+      }
+      const destinationInfo = await fsp.stat(destination);
+      if (!destinationInfo.isFile() || destinationInfo.size !== file.size || await sha256File(destination) !== file.sha256) {
+        throw new Error(`应用增量后文件校验失败：${file.path}`);
+      }
+    }
+    const executable = path.join(staged, path.basename(process.execPath));
+    const executableInfo = await fsp.stat(executable);
+    if (!executableInfo.isFile()) throw new Error('增量更新未生成有效的 BiliFetch.exe。');
+    return staged;
   }
 
   async install() {
@@ -691,14 +800,25 @@ class AppUpdater {
     const script = [
       'param([string]$Source, [string]$Target, [string]$Executable, [int]$ProcessId, [string]$LogFile)',
       "$ErrorActionPreference = 'Stop'",
+      '$Backup = "$Target.update-backup"',
       'try {',
       '  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue',
       '  Start-Sleep -Milliseconds 1200',
+      '  if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }',
+      '  Move-Item -LiteralPath $Target -Destination $Backup',
+      '  New-Item -ItemType Directory -Path $Target -Force | Out-Null',
       "  Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force",
       '  Start-Process -FilePath (Join-Path $Target $Executable)',
+      '  Start-Sleep -Milliseconds 800',
+      '  Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue',
       "  'Update installed successfully.' | Out-File -LiteralPath $LogFile -Encoding utf8",
       '} catch {',
       '  $_ | Out-File -LiteralPath $LogFile -Encoding utf8',
+      '  if (Test-Path -LiteralPath $Backup) {',
+      '    Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue',
+      '    Move-Item -LiteralPath $Backup -Destination $Target -Force',
+      '    Start-Process -FilePath (Join-Path $Target $Executable)',
+      '  }',
       '}',
       'Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue'
     ].join('\r\n');
@@ -710,7 +830,7 @@ class AppUpdater {
       '-Executable', path.basename(process.execPath),
       '-ProcessId', String(process.pid),
       '-LogFile', logFile
-    ], { detached: true, windowsHide: true, stdio: 'ignore' });
+    ], { detached: true, windowsHide: true, stdio: 'ignore', cwd: app.getPath('temp') });
     child.unref();
     setTimeout(() => app.quit(), 250);
     return { installing: true };
