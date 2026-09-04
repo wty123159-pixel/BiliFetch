@@ -178,6 +178,34 @@ enum BilibiliViewMetadataParser {
         let title: String
         let pic: String?
         let pages: [Page]
+        let ugcSeason: UGCSeason?
+
+        enum CodingKeys: String, CodingKey {
+            case bvid, title, pic, pages
+            case ugcSeason = "ugc_season"
+        }
+    }
+
+    private struct UGCSeason: Decodable {
+        let title: String
+        let cover: String?
+        let sections: [UGCSection]
+    }
+
+    private struct UGCSection: Decodable {
+        let episodes: [UGCEpisode]
+    }
+
+    private struct UGCEpisode: Decodable {
+        let bvid: String
+        let title: String?
+        let arc: UGCArc?
+    }
+
+    private struct UGCArc: Decodable {
+        let title: String?
+        let pic: String?
+        let duration: Double?
     }
 
     private struct Page: Decodable {
@@ -194,12 +222,53 @@ enum BilibiliViewMetadataParser {
 
     static func parse(data: Data, sourceURL: URL) throws -> CollectionPreview {
         let response = try JSONDecoder().decode(Response.self, from: data)
-        guard response.code == 0, let video = response.data, !video.pages.isEmpty else {
+        guard response.code == 0, let video = response.data else {
             let reason = response.message?.trimmingCharacters(in: .whitespacesAndNewlines)
             throw NSError(
                 domain: "BiliFetch.BilibiliViewMetadataParser",
                 code: response.code,
                 userInfo: [NSLocalizedDescriptionKey: reason?.isEmpty == false ? reason! : "B站未返回视频分集信息。"]
+            )
+        }
+
+
+        // A multi-part BV is itself the collection the user opened. Only use
+        // the outer UGC season when the current BV has no internal parts.
+        if video.pages.count <= 1, let season = video.ugcSeason {
+            var seenBVIDs = Set<String>()
+            let episodes = season.sections
+                .flatMap(\.episodes)
+                .filter { seenBVIDs.insert($0.bvid.lowercased()).inserted }
+            if episodes.count > 1 {
+                let collectionTitle = FilenameSanitizer.component(season.title, fallback: "B站合集")
+                let defaultThumbnail = secureURL(from: season.cover) ?? secureURL(from: video.pic)
+                let total = episodes.count
+                let items = episodes.enumerated().map { offset, episode in
+                    let index = offset + 1
+                    let rawTitle = episode.title ?? episode.arc?.title ?? "第 \(index) 集"
+                    let title = FilenameSanitizer.component(rawTitle, fallback: "第 \(index) 集")
+                    let pageURL = URL(string: "https://www.bilibili.com/video/\(episode.bvid)") ?? sourceURL
+                    return CollectionItem(
+                        id: "\(episode.bvid)_season_\(index)",
+                        index: index,
+                        total: total,
+                        title: title,
+                        url: pageURL,
+                        thumbnailURL: secureURL(from: episode.arc?.pic) ?? defaultThumbnail,
+                        duration: episode.arc?.duration,
+                        isSelected: true,
+                        status: .pending
+                    )
+                }
+                return CollectionPreview(sourceURL: sourceURL, title: collectionTitle, items: items)
+            }
+        }
+
+        guard !video.pages.isEmpty else {
+            throw NSError(
+                domain: "BiliFetch.BilibiliViewMetadataParser",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "B站未返回视频分集信息。"]
             )
         }
 

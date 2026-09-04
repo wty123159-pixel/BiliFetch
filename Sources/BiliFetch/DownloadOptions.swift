@@ -139,13 +139,18 @@ enum URLClassifier {
     }
 
     static func looksLikeCollection(_ url: URL) -> Bool {
-        let value = url.absoluteString.lowercased()
-        if url.path.lowercased().contains("/video/"),
-           URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        isMultiPartVideoURL(url) || hasOuterCollectionContext(url)
+    }
+
+    static func isMultiPartVideoURL(_ url: URL) -> Bool {
+        url.path.lowercased().contains("/video/") &&
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
-            .contains(where: { $0.name.lowercased() == "p" }) == true {
-            return true
-        }
+            .contains(where: { $0.name.lowercased() == "p" }) == true
+    }
+
+    static func hasOuterCollectionContext(_ url: URL) -> Bool {
+        let value = url.absoluteString.lowercased()
         let collectionMarkers = [
             "/list/",
             "/medialist/",
@@ -158,7 +163,36 @@ enum URLClassifier {
             "/video?tid=",
             "/upload/video"
         ]
-        return collectionMarkers.contains { value.contains($0) }
+        if collectionMarkers.contains(where: { value.contains($0) }) {
+            return true
+        }
+
+        let collectionQueryNames: Set<String> = [
+            "collection_id",
+            "fid",
+            "list_id",
+            "medialist_id",
+            "mlid",
+            "playlist_id",
+            "season_id",
+            "series_id",
+            "sid"
+        ]
+        let collectionQueryValueMarkers = [
+            "collection",
+            "medialist",
+            "playlist",
+            "series",
+            "ugc_season",
+            "videopod.sections"
+        ]
+        let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        return queryItems.contains { item in
+            let name = item.name.lowercased()
+            let itemValue = item.value?.lowercased() ?? ""
+            return collectionQueryNames.contains(name) ||
+                (name == "spm_id_from" && collectionQueryValueMarkers.contains(where: itemValue.contains))
+        }
     }
 
     static func isVideoPage(_ url: URL) -> Bool {

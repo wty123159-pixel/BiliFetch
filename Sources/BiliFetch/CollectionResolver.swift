@@ -3,12 +3,14 @@ import Foundation
 @MainActor
 final class CollectionResolver {
     private let runner = ProcessRunner()
-    private var metadataTask: URLSessionDataTask?
+    private let metadataRunner = ProcessRunner()
+    private var metadataOutputLines: [String] = []
+    private var metadataDiagnosticLines: [String] = []
     private var outputLines: [String] = []
     private var diagnosticLines: [String] = []
     private var wasCancelled = false
 
-    var isRunning: Bool { metadataTask != nil || runner.isRunning }
+    var isRunning: Bool { metadataRunner.isRunning || runner.isRunning }
 
     func resolve(
         sourceURL: URL,
@@ -21,34 +23,55 @@ final class CollectionResolver {
     ) throws {
         outputLines = []
         diagnosticLines = []
+        metadataOutputLines = []
+        metadataDiagnosticLines = []
         wasCancelled = false
 
         if let bvid = URLClassifier.bvid(from: sourceURL) {
             var components = URLComponents(string: "https://api.bilibili.com/x/web-interface/view")!
             components.queryItems = [URLQueryItem(name: "bvid", value: bvid)]
-            var request = URLRequest(url: components.url!)
-            request.timeoutInterval = 15
-            request.setValue(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15",
-                forHTTPHeaderField: "User-Agent"
-            )
-            request.setValue(sourceURL.absoluteString, forHTTPHeaderField: "Referer")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
             onStatus("正在读取视频分集信息…")
 
-            metadataTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-                DispatchQueue.main.async {
+            let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15"
+            try metadataRunner.start(
+                executable: URL(fileURLWithPath: "/usr/bin/curl"),
+                arguments: [
+                    "--fail",
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--max-time", "15",
+                    "--user-agent", userAgent,
+                    "--referer", sourceURL.absoluteString,
+                    "--header", "Accept: application/json",
+                    "--", components.url!.absoluteString
+                ],
+                onLine: { [weak self] line, stream in
                     guard let self else { return }
-                    self.metadataTask = nil
-                    guard !self.wasCancelled else { return }
+                    switch stream {
+                    case .standardOutput: self.metadataOutputLines.append(line)
+                    case .standardError: self.metadataDiagnosticLines.append(line)
+                    }
+                },
+                onFinish: { [weak self] exitCode in
+                    guard let self, !self.wasCancelled else { return }
+                    let metadataDiagnostics = self.metadataDiagnosticLines.joined(separator: "\n")
+                    let data = self.metadataOutputLines.joined(separator: "\n").data(using: .utf8)
+                    let preview = exitCode == 0
+                        ? data.flatMap { try? BilibiliViewMetadataParser.parse(data: $0, sourceURL: sourceURL) }
+                        : nil
 
-                    if let data,
-                       let preview = try? BilibiliViewMetadataParser.parse(data: data, sourceURL: sourceURL) {
+                    if let preview, preview.items.count > 1 {
                         onStatus("已读取 \(preview.items.count) 个视频")
-                        completion(.success(preview), "")
+                        completion(.success(preview), metadataDiagnostics)
                         return
                     }
 
+                    // The view API only describes the current BV when it has
+                    // no UGC season metadata. Confirm a one-item response with
+                    // yt-dlp before calling it final.
+                    onStatus("正在确认是否包含完整合集…")
+                    let mayUseSingleVideoFallback = !URLClassifier.hasOuterCollectionContext(sourceURL)
                     do {
                         try self.resolveWithYTDLP(
                             sourceURL: sourceURL,
@@ -56,15 +79,20 @@ final class CollectionResolver {
                             cookies: cookies,
                             cookieFileURL: cookieFileURL,
                             toolDirectory: toolDirectory,
+                            fallbackPreview: mayUseSingleVideoFallback ? preview : nil,
+                            requireMultipleItems: !mayUseSingleVideoFallback,
                             onStatus: onStatus,
                             completion: completion
                         )
                     } catch {
-                        completion(.failure(error), self.diagnosticLines.joined(separator: "\n"))
+                        if mayUseSingleVideoFallback, let preview {
+                            completion(.success(preview), metadataDiagnostics)
+                        } else {
+                            completion(.failure(error), metadataDiagnostics)
+                        }
                     }
                 }
-            }
-            metadataTask?.resume()
+            )
             return
         }
 
@@ -85,6 +113,8 @@ final class CollectionResolver {
         cookies: BrowserCookies,
         cookieFileURL: URL?,
         toolDirectory: URL?,
+        fallbackPreview: CollectionPreview? = nil,
+        requireMultipleItems: Bool = false,
         onStatus: @escaping (String) -> Void,
         completion: @escaping (Result<CollectionPreview, Error>, String) -> Void
     ) throws {
@@ -132,6 +162,11 @@ final class CollectionResolver {
                 guard let self else { return }
                 let diagnostics = self.diagnosticLines.joined(separator: "\n")
                 guard exitCode == 0 else {
+                    if let fallbackPreview {
+                        onStatus("未发现外层合集，已读取当前视频")
+                        completion(.success(fallbackPreview), diagnostics)
+                        return
+                    }
                     let error = NSError(
                         domain: "BiliFetch.CollectionResolver",
                         code: Int(exitCode),
@@ -142,9 +177,22 @@ final class CollectionResolver {
                 }
 
                 do {
-                    completion(.success(try CollectionMetadataParser.parse(lines: self.outputLines, sourceURL: sourceURL)), diagnostics)
+                    let preview = try CollectionMetadataParser.parse(lines: self.outputLines, sourceURL: sourceURL)
+                    guard !requireMultipleItems || preview.items.count > 1 else {
+                        throw NSError(
+                            domain: "BiliFetch.CollectionResolver",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "链接带有合集信息，但只解析到当前视频，请稍后重试。"]
+                        )
+                    }
+                    completion(.success(preview), diagnostics)
                 } catch {
-                    completion(.failure(error), diagnostics)
+                    if let fallbackPreview {
+                        onStatus("未发现外层合集，已读取当前视频")
+                        completion(.success(fallbackPreview), diagnostics)
+                    } else {
+                        completion(.failure(error), diagnostics)
+                    }
                 }
             }
         )
@@ -152,8 +200,7 @@ final class CollectionResolver {
 
     func cancel() {
         wasCancelled = true
-        metadataTask?.cancel()
-        metadataTask = nil
+        metadataRunner.cancel()
         runner.cancel()
     }
 

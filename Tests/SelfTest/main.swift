@@ -26,8 +26,23 @@ check(
 
 let videoURL = URL(string: "https://www.bilibili.com/video/BV123")!
 let collectionURL = URL(string: "https://space.bilibili.com/12/lists/34?type=season")!
+let collectionContextVideoURL = URL(
+    string: "https://www.bilibili.com/video/BV123?spm_id_from=333.788.videopod.sections"
+)!
 check(!DownloadScope.automatic.downloadsPlaylist(for: videoURL), "ordinary BV links resolve to current video")
 check(DownloadScope.automatic.downloadsPlaylist(for: collectionURL), "collection links resolve to collections")
+check(
+    URLClassifier.hasOuterCollectionContext(collectionContextVideoURL),
+    "recognizes collection context carried by a BV video link"
+)
+check(
+    DownloadScope.automatic.downloadsPlaylist(for: collectionContextVideoURL),
+    "BV links opened from a collection keep playlist resolution enabled"
+)
+check(
+    !URLClassifier.hasOuterCollectionContext(videoURL),
+    "does not misclassify an ordinary BV link as an outer collection"
+)
 check(
     DownloadScope.automatic.downloadsPlaylist(
         for: URL(string: "https://www.bilibili.com/video/BV123?p=2")!
@@ -190,6 +205,30 @@ do {
     check(preview.items[1].url.absoluteString.contains("p=2"), "creates canonical per-page download URLs")
 } catch {
     check(false, "parses Bilibili view metadata: \(error.localizedDescription)")
+}
+
+let bilibiliUGCSeasonJSON = #"{"code":0,"message":"0","data":{"bvid":"BVseason01","title":"当前视频","pic":"http://i0.hdslb.com/main.jpg","pages":[{"page":1,"part":"当前视频","duration":61,"first_frame":""}],"ugc_season":{"title":"完整 UGC 合集","cover":"http://i0.hdslb.com/season.jpg","sections":[{"episodes":[{"bvid":"BVseason01","title":"合集第一集","arc":{"pic":"http://i1.hdslb.com/one.jpg","duration":61}},{"bvid":"BVseason02","title":"合集第二集","arc":{"pic":"http://i2.hdslb.com/two.jpg","duration":125}}]}]}}}"#.data(using: .utf8)!
+
+do {
+    let preview = try BilibiliViewMetadataParser.parse(data: bilibiliUGCSeasonJSON, sourceURL: videoURL)
+    check(preview.title == "完整 UGC 合集", "uses the outer UGC collection title")
+    check(preview.items.count == 2, "expands every BV from the outer UGC collection")
+    check(preview.items[1].title == "合集第二集", "uses each UGC episode title")
+    check(preview.items[1].url.absoluteString.contains("BVseason02"), "creates a download URL for each UGC episode")
+    check(preview.items[1].thumbnailURL?.scheme == "https", "normalizes UGC episode thumbnails")
+} catch {
+    check(false, "parses outer UGC collection metadata: \(error.localizedDescription)")
+}
+
+let nestedCollectionJSON = #"{"code":0,"message":"0","data":{"bvid":"BVnested","title":"当前多P合集","pic":"http://i0.hdslb.com/main.jpg","pages":[{"page":1,"part":"分P一","duration":61,"first_frame":""},{"page":2,"part":"分P二","duration":62,"first_frame":""}],"ugc_season":{"title":"外层合集","cover":"http://i0.hdslb.com/season.jpg","sections":[{"episodes":[{"bvid":"BVnested","title":"外层第一集"},{"bvid":"BVother","title":"外层第二集"}]}]}}}"#.data(using: .utf8)!
+
+do {
+    let preview = try BilibiliViewMetadataParser.parse(data: nestedCollectionJSON, sourceURL: videoURL)
+    check(preview.title == "当前多P合集", "prefers the opened BV's internal parts over its outer UGC season")
+    check(preview.items.count == 2, "keeps every internal part when a BV also belongs to an outer collection")
+    check(preview.items[1].url.absoluteString.contains("p=2"), "keeps canonical part URLs for nested collections")
+} catch {
+    check(false, "prioritizes a multi-part BV over its outer collection: \(error.localizedDescription)")
 }
 
 let mixedContainerLines = (1...28).map { index in

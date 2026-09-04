@@ -4,7 +4,7 @@
 
 ## 使用
 
-1. 解压整个 `BiliFetch-Windows-x64-1.1.2.zip`，不要只复制其中的 `BiliFetch.exe`。
+1. 解压整个 `BiliFetch-Windows-x64-1.1.3.zip`，不要只复制其中的 `BiliFetch.exe`。
 2. 双击 `BiliFetch.exe`。
 3. 软件会自动检测并调用包内的 yt-dlp、FFmpeg、FFprobe 和 aria2，不需要联网安装环境或管理员权限。
 4. 粘贴链接并等待分集预览，选择保存位置和需要的分集，然后点击“开始下载”。只有组件被删除或损坏时，界面才会显示“修复组件”。
@@ -19,7 +19,7 @@
 ./scripts/build-windows.sh
 ```
 
-构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.2.zip`。
+构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.3.zip`。
 
 ## 在线升级发布
 
@@ -41,8 +41,8 @@ https://github.com/你的用户名/BiliFetch/releases/latest/download/update.jso
 node scripts/create-release-manifest.mjs \
   --windows dist/BiliFetch-Windows-x64-1.2.0.zip \
   --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.2.0.zip \
-  --macos dist/BiliFetch-macOS-1.5.9.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.9.zip \
+  --macos dist/BiliFetch-macOS-1.5.10.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.10.zip \
   --notes release-notes.txt \
   --output dist/update.json
 ```

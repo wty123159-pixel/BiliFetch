@@ -83,7 +83,8 @@ final class DownloadViewModel: ObservableObject {
     @Published var isPaused = false
     @Published var requiresReanalysisAfterPermanentFailure = false
 
-    private let collectionResolver = CollectionResolver()
+    private var activeCollectionResolver: CollectionResolver?
+    private var activeAnalysisID: UUID?
     private let authService = BilibiliAuthService()
     private let defaults = UserDefaults.standard
     private let networkMonitor = NWPathMonitor()
@@ -98,7 +99,6 @@ final class DownloadViewModel: ObservableObject {
     private var permanentFailureCount = 0
     private var pausedSingleJob: (request: DownloadRequest, attempt: Int)?
     private var wasCancelled = false
-    private var analysisWasCancelled = false
     private var automaticAnalysisTask: Task<Void, Never>?
     private var automaticDetectionURL: String?
     private var automaticDetectedCollection: Bool?
@@ -232,7 +232,11 @@ final class DownloadViewModel: ObservableObject {
     }
 
     func linkDidChange() {
-        guard !isBusy else { return }
+        guard !isDownloading else { return }
+        if isAnalyzing {
+            cancelActiveCollectionAnalysis()
+            state = .idle
+        }
         automaticResumeTask?.cancel()
         requiresReanalysisAfterPermanentFailure = false
         automaticAnalysisTask?.cancel()
@@ -255,7 +259,11 @@ final class DownloadViewModel: ObservableObject {
     }
 
     func scopeDidChange() {
-        guard !isBusy else { return }
+        guard !isDownloading else { return }
+        if isAnalyzing {
+            cancelActiveCollectionAnalysis()
+            state = .idle
+        }
         automaticResumeTask?.cancel()
         if savedResumeSnapshot() != nil { clearResumeSnapshot() }
         automaticAnalysisTask?.cancel()
@@ -269,8 +277,12 @@ final class DownloadViewModel: ObservableObject {
 
     func pasteLink() {
         if let value = NSPasteboard.general.string(forType: .string) {
-            link = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            linkDidChange()
+            let pastedLink = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if pastedLink == link {
+                linkDidChange()
+            } else {
+                link = pastedLink
+            }
         }
     }
 
@@ -349,8 +361,12 @@ final class DownloadViewModel: ObservableObject {
 
         automaticAnalysisTask?.cancel()
         automaticAnalysisTask = nil
+        activeCollectionResolver?.cancel()
+        let resolver = CollectionResolver()
+        let analysisID = UUID()
+        activeCollectionResolver = resolver
+        activeAnalysisID = analysisID
         savePreferences()
-        analysisWasCancelled = false
         state = .analyzing
         progress = 0
         currentItem = ""
@@ -364,25 +380,27 @@ final class DownloadViewModel: ObservableObject {
         let analysisURL = url.absoluteString
 
         do {
-            try collectionResolver.resolve(
+            try resolver.resolve(
                 sourceURL: url,
                 executable: ytDLP,
                 cookies: cookies,
                 cookieFileURL: activeCookieFileURL,
                 toolDirectory: backend.ffmpeg?.deletingLastPathComponent(),
                 onStatus: { [weak self] status in
-                    self?.statusText = status
+                    guard let self,
+                          self.activeAnalysisID == analysisID,
+                          URLClassifier.validatedURL(from: self.link)?.absoluteString == analysisURL else { return }
+                    self.statusText = status
                 },
                 completion: { [weak self] result, diagnostics in
-                    guard let self else { return }
+                    guard let self,
+                          self.activeAnalysisID == analysisID,
+                          URLClassifier.validatedURL(from: self.link)?.absoluteString == analysisURL else { return }
+                    self.activeAnalysisID = nil
+                    self.activeCollectionResolver = nil
                     if !diagnostics.isEmpty {
                         self.logLines = diagnostics.components(separatedBy: .newlines)
                         self.detailText = diagnostics
-                    }
-                    if self.analysisWasCancelled {
-                        self.state = .cancelled
-                        self.statusText = "已取消获取合集"
-                        return
                     }
                     switch result {
                     case .success(let preview):
@@ -423,8 +441,12 @@ final class DownloadViewModel: ObservableObject {
                 }
             )
         } catch {
-            state = .failed("无法启动链接解析：\(error.localizedDescription)")
-            statusText = "链接解析失败"
+            if activeAnalysisID == analysisID {
+                activeAnalysisID = nil
+                activeCollectionResolver = nil
+                state = .failed("无法启动链接解析：\(error.localizedDescription)")
+                statusText = "链接解析失败"
+            }
         }
     }
 
@@ -605,9 +627,8 @@ final class DownloadViewModel: ObservableObject {
             pendingResumeSnapshot = nil
             automaticResumeTask?.cancel()
             clearResumeSnapshot()
-            analysisWasCancelled = true
             statusText = "正在取消链接解析…"
-            collectionResolver.cancel()
+            cancelActiveCollectionAnalysis()
             state = .cancelled
             statusText = "已取消解析"
             return
@@ -1174,6 +1195,12 @@ final class DownloadViewModel: ObservableObject {
         completedOutputFiles.removeAll()
         permanentFailureCount = 0
         requiresReanalysisAfterPermanentFailure = false
+    }
+
+    private func cancelActiveCollectionAnalysis() {
+        activeAnalysisID = nil
+        activeCollectionResolver?.cancel()
+        activeCollectionResolver = nil
     }
 
     private func scheduleAutomaticCollectionAnalysis() {

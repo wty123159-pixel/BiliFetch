@@ -71,10 +71,10 @@ git push
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.1.2.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.2.zip \
-  --macos dist/BiliFetch-macOS-1.5.9.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.9.zip \
+  --windows dist/BiliFetch-Windows-x64-1.1.3.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.3.zip \
+  --macos dist/BiliFetch-macOS-1.5.10.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.10.zip \
   --notes Updates/release-notes-2026-09-05-2.md \
   --output dist/update.json
 ```

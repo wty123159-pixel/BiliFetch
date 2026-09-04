@@ -4,7 +4,8 @@ const $ = (selector) => document.querySelector(selector);
 const state = {
   preview: null, destination: '', settings: {}, tasks: new Map(), downloading: false,
   paused: false, logs: [], pollTimer: null, version: '', updateRelease: null,
-  thumbnailCache: new Map(), thumbnailObserver: null
+  thumbnailCache: new Map(), thumbnailObserver: null,
+  resolveGeneration: 0, activeResolveID: '', resolving: false, pendingResolve: false
 };
 
 const statusText = {
@@ -63,7 +64,11 @@ function selectedItems() {
 }
 
 function updateSelectionSummary() {
-  if (!state.preview) return;
+  if (!state.preview) {
+    $('#selectedCount').textContent = '已选择 0 / 0';
+    $('#startButton').disabled = true;
+    return;
+  }
   const selected = selectedItems().length;
   $('#selectedCount').textContent = `已选择 ${selected} / ${state.preview.items.length}`;
   $('#startButton').disabled = !selected || !state.destination || state.downloading;
@@ -173,30 +178,62 @@ function updateControls() {
   $('#pauseButton').textContent = state.paused ? '继续' : '暂停';
   $('#startButton').classList.toggle('hidden', state.downloading);
   $('#sourceURL').disabled = state.downloading;
-  $('#resolveButton').disabled = state.downloading;
+  $('#resolveButton').disabled = state.downloading || state.resolving;
   $('#destinationButton').disabled = state.downloading;
   updateSelectionSummary();
 }
 
+function invalidatePreviewForLinkChange() {
+  state.resolveGeneration += 1;
+  state.activeResolveID = '';
+  state.preview = null;
+  state.tasks.clear();
+  renderPreview();
+  updateControls();
+}
+
 async function resolveLink() {
+  if (state.resolving) {
+    state.pendingResolve = true;
+    return;
+  }
   const url = $('#sourceURL').value.trim();
   if (!url) { setNotice('请先粘贴 B 站链接。', 'error'); return; }
+  const requestID = `resolve-${++state.resolveGeneration}`;
+  state.activeResolveID = requestID;
+  state.resolving = true;
+  state.pendingResolve = false;
+  state.preview = null;
+  state.tasks.clear();
+  renderPreview();
   $('#resolveButton').disabled = true;
   $('#resolveButton').textContent = '正在解析…';
   setNotice('正在获取合集信息，请稍候…');
   try {
     state.settings = readSettings();
-    const preview = await window.biliFetch.resolve({ url, settings: state.settings });
+    const preview = await window.biliFetch.resolve({ url, settings: state.settings, requestID });
+    if (state.activeResolveID !== requestID || $('#sourceURL').value.trim() !== url) return;
     state.preview = preview;
     state.tasks.clear();
     preview.items.forEach((item) => state.tasks.set(item.key, item));
     renderPreview();
     setNotice(`解析完成：已获取 ${preview.items.length} 个视频，默认全部勾选。`, 'success');
   } catch (error) {
-    setNotice(`解析失败：${error.message}`, 'error');
+    if (state.activeResolveID === requestID && $('#sourceURL').value.trim() === url) {
+      state.preview = null;
+      state.tasks.clear();
+      renderPreview();
+      setNotice(`解析失败：${error.message}`, 'error');
+    }
   } finally {
-    $('#resolveButton').disabled = false;
+    if (state.activeResolveID === requestID) state.activeResolveID = '';
+    state.resolving = false;
     $('#resolveButton').textContent = '解析链接';
+    updateControls();
+    if (state.pendingResolve) {
+      state.pendingResolve = false;
+      setTimeout(resolveLink, 0);
+    }
   }
 }
 
@@ -305,8 +342,13 @@ async function installUpdate() {
 }
 
 function bindEvents() {
-  $('#pasteButton').addEventListener('click', async () => { $('#sourceURL').value = await window.biliFetch.readClipboard(); resolveLink(); });
+  $('#pasteButton').addEventListener('click', async () => {
+    $('#sourceURL').value = await window.biliFetch.readClipboard();
+    invalidatePreviewForLinkChange();
+    resolveLink();
+  });
   $('#resolveButton').addEventListener('click', resolveLink);
+  $('#sourceURL').addEventListener('input', invalidatePreviewForLinkChange);
   $('#sourceURL').addEventListener('keydown', (event) => { if (event.key === 'Enter') resolveLink(); });
   $('#destinationButton').addEventListener('click', async () => {
     const value = await window.biliFetch.chooseDestination();
@@ -331,7 +373,9 @@ function bindEvents() {
   $('#installUpdateButton').addEventListener('click', installUpdate);
 
   window.biliFetch.onToolProgress(({ label, percent }) => setNotice(`正在准备 ${label}${percent === null ? '…' : `：${percent}%`}`));
-  window.biliFetch.onResolveProgress(({ message }) => setNotice(message));
+  window.biliFetch.onResolveProgress(({ requestID, message }) => {
+    if (requestID === state.activeResolveID) setNotice(message);
+  });
   window.biliFetch.onDownloadTask(patchTask);
   window.biliFetch.onDownloadState((payload) => { state.paused = payload.paused; state.downloading = payload.tasks.some((task) => !['completed', 'failed', 'cancelled'].includes(task.status)); payload.tasks.forEach((task) => state.tasks.set(task.key, task)); updateControls(); renderPreview(); });
   window.biliFetch.onDownloadLog((line) => { state.logs.push(line); if (state.logs.length > 600) state.logs.shift(); $('#logOutput').textContent = state.logs.join('\n'); });

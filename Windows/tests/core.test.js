@@ -11,6 +11,16 @@ test('only accepts Bilibili and b23 links', () => {
   assert.equal(core.validateBilibiliURL('https://bilibili.com.example.org/video/x'), null);
 });
 
+test('detects outer collection context without treating every BV link as a collection', () => {
+  assert.equal(core.hasOuterCollectionContext('https://www.bilibili.com/video/BV1abc123'), false);
+  assert.equal(
+    core.hasOuterCollectionContext('https://www.bilibili.com/video/BV1abc123?spm_id_from=333.788.videopod.sections'),
+    true
+  );
+  assert.equal(core.hasOuterCollectionContext('https://space.bilibili.com/12/lists/34?type=season'), true);
+  assert.equal(core.hasOuterCollectionContext('https://www.bilibili.com/video/BV1abc123?season_id=42'), true);
+});
+
 test('parses every mixed collection entry without filtering by format', () => {
   const lines = [
     JSON.stringify({ id: 'BV1x', title: '第一集 FLV', webpage_url: 'https://www.bilibili.com/video/BV1x?p=1', playlist_title: '合集', playlist_index: 1 }),
@@ -38,6 +48,51 @@ test('normalizes Bilibili thumbnails and keeps each multi-part cover distinct', 
   assert.equal(preview.items.length, 2);
   assert.equal(preview.items[0].thumbnail, 'https://i1.hdslb.com/one.jpg');
   assert.equal(preview.items[1].thumbnail, 'https://i2.hdslb.com/two.jpg');
+  assert.match(preview.items[1].url, /[?&]p=2/);
+});
+
+test('expands the outer UGC collection carried by a single BV response', () => {
+  const preview = core.parseBilibiliViewMetadata({
+    code: 0,
+    data: {
+      bvid: 'BVseason01', title: '当前视频', pic: 'http://i0.hdslb.com/main.jpg',
+      pages: [{ page: 1, part: '当前视频', duration: 10 }],
+      ugc_season: {
+        title: '完整 UGC 合集', cover: 'http://i0.hdslb.com/season.jpg',
+        sections: [{ episodes: [
+          { bvid: 'BVseason01', title: '合集第一集', arc: { pic: 'http://i1.hdslb.com/one.jpg', duration: 10 } },
+          { bvid: 'BVseason02', title: '合集第二集', arc: { pic: 'http://i2.hdslb.com/two.jpg', duration: 20 } }
+        ] }]
+      }
+    }
+  }, 'https://www.bilibili.com/video/BVseason01');
+  assert.equal(preview.title, '完整 UGC 合集');
+  assert.equal(preview.items.length, 2);
+  assert.equal(preview.items[1].title, '合集第二集');
+  assert.match(preview.items[1].url, /BVseason02/);
+  assert.match(preview.items[1].thumbnail, /^https:/);
+});
+
+test('prefers the opened BV parts when it also belongs to an outer UGC collection', () => {
+  const preview = core.parseBilibiliViewMetadata({
+    code: 0,
+    data: {
+      bvid: 'BVnested', title: '当前多P合集', pic: 'http://i0.hdslb.com/main.jpg',
+      pages: [
+        { page: 1, part: '分P一', duration: 10 },
+        { page: 2, part: '分P二', duration: 20 }
+      ],
+      ugc_season: {
+        title: '外层合集',
+        sections: [{ episodes: [
+          { bvid: 'BVnested', title: '外层第一集' },
+          { bvid: 'BVother', title: '外层第二集' }
+        ] }]
+      }
+    }
+  }, 'https://www.bilibili.com/video/BVnested');
+  assert.equal(preview.title, '当前多P合集');
+  assert.equal(preview.items.length, 2);
   assert.match(preview.items[1].url, /[?&]p=2/);
 });
 

@@ -31,6 +31,31 @@ function validateBilibiliURL(value) {
   }
 }
 
+function hasOuterCollectionContext(value) {
+  const validated = validateBilibiliURL(value);
+  if (!validated) return false;
+  const url = new URL(validated);
+  const normalized = url.toString().toLowerCase();
+  const pathMarkers = [
+    '/list/', '/medialist/', '/channel/collectiondetail', '/channel/seriesdetail',
+    '/lists/', '/favlist', '/bangumi/play/ss', '/cheese/play/ss', '/upload/video'
+  ];
+  if (pathMarkers.some((marker) => normalized.includes(marker))) return true;
+
+  const queryNames = new Set([
+    'collection_id', 'fid', 'list_id', 'medialist_id', 'mlid', 'playlist_id',
+    'season_id', 'series_id', 'sid'
+  ]);
+  const contextMarkers = ['collection', 'medialist', 'playlist', 'series', 'ugc_season', 'videopod.sections'];
+  for (const [name, queryValue] of url.searchParams.entries()) {
+    const normalizedName = name.toLowerCase();
+    const normalizedValue = String(queryValue || '').toLowerCase();
+    if (queryNames.has(normalizedName)) return true;
+    if (normalizedName === 'spm_id_from' && contextMarkers.some((marker) => normalizedValue.includes(marker))) return true;
+  }
+  return false;
+}
+
 function qualitySelector(quality = 'best') {
   if (quality === 'best') return 'bv*+ba/b';
   const bounds = { p1080: 1080, p720: 720, p480: 480 };
@@ -130,6 +155,44 @@ function parseBilibiliViewMetadata(payload, sourceURL) {
   const data = payload?.data;
   const bvid = String(data?.bvid || sourceURL || '').match(/BV[0-9A-Za-z]+/i)?.[0];
   if (payload?.code !== 0 || !data || !bvid) throw new Error('B站分集接口没有返回有效数据。');
+
+  const season = data.ugc_season;
+  const seasonEpisodes = Array.isArray(season?.sections)
+    ? season.sections.flatMap((section) => Array.isArray(section?.episodes) ? section.episodes : [])
+    : [];
+  const seenSeasonBVIDs = new Set();
+  const uniqueSeasonEpisodes = seasonEpisodes.filter((episode) => {
+    const episodeBVID = String(episode?.bvid || '').trim();
+    const identity = episodeBVID.toLowerCase();
+    if (!episodeBVID || seenSeasonBVIDs.has(identity)) return false;
+    seenSeasonBVIDs.add(identity);
+    return true;
+  });
+  if ((!Array.isArray(data.pages) || data.pages.length <= 1) && uniqueSeasonEpisodes.length > 1) {
+    const total = uniqueSeasonEpisodes.length;
+    const defaultThumbnail = normalizeThumbnailURL(season.cover || data.pic);
+    const items = uniqueSeasonEpisodes.map((episode, offset) => {
+      const index = offset + 1;
+      const episodeBVID = String(episode.bvid);
+      return {
+        key: `${episodeBVID.toLowerCase()}:season:${index}`,
+        id: episodeBVID,
+        index,
+        title: String(episode.title || episode.arc?.title || `第 ${index} 集`),
+        url: `https://www.bilibili.com/video/${episodeBVID}`,
+        thumbnail: normalizeThumbnailURL(episode.arc?.pic) || defaultThumbnail,
+        duration: Number(episode.arc?.duration) || 0,
+        selected: true,
+        status: 'ready',
+        progress: 0,
+        speed: '',
+        retries: 0,
+        error: ''
+      };
+    });
+    return { sourceURL, title: String(season.title || data.title || 'BiliFetch 下载'), items };
+  }
+
   const pages = Array.isArray(data.pages) && data.pages.length
     ? data.pages
     : [{ page: 1, part: data.title, duration: data.duration, first_frame: data.pic }];
@@ -226,6 +289,7 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
 
 module.exports = {
   buildDownloadArguments,
+  hasOuterCollectionContext,
   hasCompleteToolset,
   isPlausibleFinalVideo,
   normalizeThumbnailURL,

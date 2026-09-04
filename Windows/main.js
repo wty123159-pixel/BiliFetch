@@ -281,16 +281,23 @@ async function resolveWithBilibiliAPI(validated) {
   return core.parseBilibiliViewMetadata(await response.json(), validated);
 }
 
-async function resolveCollection(sourceURL, settings = {}) {
+async function resolveCollection(sourceURL, settings = {}, requestID = '') {
   const validated = core.validateBilibiliURL(sourceURL);
   if (!validated) throw new Error('请输入有效的 B 站视频或合集链接。');
-  if (/\/video\/BV[0-9A-Za-z]+/i.test(new URL(validated).pathname)) {
-    send('resolve:progress', { count: 0, message: '正在读取 B 站分集封面与标题…' });
+  let singleVideoFallback = null;
+  const isBVIDVideo = /\/video\/BV[0-9A-Za-z]+/i.test(new URL(validated).pathname);
+  const videoHasCollectionContext = isBVIDVideo && core.hasOuterCollectionContext(validated);
+  if (isBVIDVideo) {
+    send('resolve:progress', { requestID, count: 0, message: '正在读取 B 站分集封面与标题…' });
     try {
       const preview = await resolveWithBilibiliAPI(validated);
-      if (preview?.items?.length) return preview;
+      if (preview?.items?.length > 1) return preview;
+      if (preview?.items?.length === 1) {
+        singleVideoFallback = videoHasCollectionContext ? null : preview;
+        send('resolve:progress', { requestID, count: 0, message: '正在确认是否包含完整合集…' });
+      }
     } catch (error) {
-      send('resolve:progress', { count: 0, message: `分集接口暂不可用，正在切换 yt-dlp：${error.message}` });
+      send('resolve:progress', { requestID, count: 0, message: `分集接口暂不可用，正在切换 yt-dlp：${error.message}` });
     }
   }
   const tools = await locateTools();
@@ -307,15 +314,23 @@ async function resolveCollection(sourceURL, settings = {}) {
     onLine(line, stream) {
       if (stream === 'stdout' && line.trim().startsWith('{')) {
         lines.push(line);
-        send('resolve:progress', { count: lines.length, message: `已读取 ${lines.length} 个视频…` });
+        send('resolve:progress', { requestID, count: lines.length, message: `已读取 ${lines.length} 个视频…` });
       } else if (stream === 'stderr') diagnostics.push(line);
     }
   });
   if (result.code !== 0 || !lines.length) {
+    if (singleVideoFallback) {
+      send('resolve:progress', { requestID, count: 1, message: '未发现外层合集，已读取当前视频' });
+      return singleVideoFallback;
+    }
     const detail = diagnostics.slice(-8).join('\n');
     throw new Error(detail || '没有解析到可下载的视频。');
   }
-  return core.parsePreviewLines(lines, validated);
+  const preview = core.parsePreviewLines(lines, validated);
+  if (videoHasCollectionContext && preview.items.length <= 1) {
+    throw new Error('链接带有合集信息，但只解析到当前视频，请稍后重试。');
+  }
+  return preview;
 }
 
 function thumbnailAllowed(url) {
@@ -774,7 +789,7 @@ function registerIPC() {
   ipcMain.handle('tools:prepare', prepareTools);
   ipcMain.handle('tools:status', locateTools);
   ipcMain.handle('settings:save', async (_, settings) => { await writeJSON(userDataPath('settings.json'), settings); return true; });
-  ipcMain.handle('resolve:start', (_, payload) => resolveCollection(payload.url, payload.settings));
+  ipcMain.handle('resolve:start', (_, payload) => resolveCollection(payload.url, payload.settings, payload.requestID));
   ipcMain.handle('thumbnail:load', (_, source) => loadThumbnail(source));
   ipcMain.handle('downloads:start', (_, payload) => downloadManager.start(payload));
   ipcMain.handle('downloads:pause', () => downloadManager.pause(false));
