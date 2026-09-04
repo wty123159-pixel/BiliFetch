@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; style-src 'self'; script-src 'self';">
+  <title>BiliFetch</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="frozen-panel">
+      <header class="brand-row">
+        <div class="brand">
+          <img src="../assets/icon.png" alt="BiliFetch">
+          <div><h1>BiliFetch</h1><p>Windows 版 · 先预览，再下载视频或完整合集</p></div>
+        </div>
+        <div class="header-actions">
+          <span id="toolStatus" class="status-pill warning"><i></i>需要准备组件</span>
+          <button id="prepareButton" class="secondary">准备组件</button>
+          <button id="updateButton" class="secondary">检查更新</button>
+          <button id="advancedButton" class="secondary">高级设置</button>
+        </div>
+      </header>
+
+      <div class="input-row">
+        <div class="url-field">
+          <span class="link-icon">↗</span>
+          <input id="sourceURL" type="url" placeholder="粘贴 B 站视频、合集或多 P 链接" autocomplete="off">
+        </div>
+        <button id="pasteButton" class="secondary">粘贴</button>
+        <button id="resolveButton" class="accent">解析链接</button>
+      </div>
+
+      <div class="action-row">
+        <button id="destinationButton" class="location-button"><span>📁 保存位置</span><small id="destinationPath">尚未选择</small></button>
+        <div class="selection-actions">
+          <button id="selectAllButton" class="quiet" disabled>全选</button>
+          <button id="selectNoneButton" class="quiet" disabled>全不选</button>
+        </div>
+        <div class="download-actions">
+          <button id="pauseButton" class="secondary hidden">暂停</button>
+          <button id="cancelButton" class="danger hidden">取消</button>
+          <button id="startButton" class="primary" disabled>开始下载</button>
+        </div>
+      </div>
+
+      <div id="notice" class="notice">请输入链接并解析，分集封面、标题与选择框会显示在下方。</div>
+      <div id="batchProgress" class="batch-progress hidden"><span id="batchSummary"></span><button id="openFolderButton" class="quiet">打开文件夹</button></div>
+    </section>
+
+    <section class="scroll-region">
+      <div id="emptyState" class="empty-state">
+        <div class="empty-art">▶</div>
+        <h2>等待解析链接</h2>
+        <p>合集会按分集展示，默认全选；下载进度和速度直接显示在每张卡片中。</p>
+      </div>
+      <div id="collectionHeader" class="collection-header hidden">
+        <div><h2 id="collectionTitle"></h2><p id="collectionCount"></p></div>
+        <span id="selectedCount"></span>
+      </div>
+      <div id="videoGrid" class="video-grid"></div>
+    </section>
+  </main>
+
+  <dialog id="advancedDialog">
+    <form method="dialog" class="dialog-card">
+      <div class="dialog-title"><div><h2>高级设置</h2><p>设置会自动保存</p></div><button class="icon-button" value="cancel">×</button></div>
+      <label>视频画质<select id="quality"><option value="best">当前可用最高画质</option><option value="p1080">1080p 以内</option><option value="p720">720p 以内</option><option value="p480">480p 以内</option></select></label>
+      <label>下载引擎<select id="engine"><option value="aria2">高速（aria2，8 连接）</option><option value="native">标准（yt-dlp）</option></select></label>
+      <label>同时下载数量<div class="range-row"><input id="concurrency" type="range" min="1" max="5" step="1"><output id="concurrencyValue">3</output></div></label>
+      <label>浏览器登录状态<select id="browser"><option value="none">不读取浏览器</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="firefox">Firefox</option><option value="brave">Brave</option></select></label>
+      <label class="check-row"><input id="subtitles" type="checkbox">同时保存中文字幕（存在时）</label>
+      <div class="settings-section">
+        <div class="section-heading"><strong>在线更新</strong><small id="appVersion"></small></div>
+        <label class="check-row"><input id="autoCheckUpdates" type="checkbox">启动后自动检查更新</label>
+        <label>更新清单地址<input id="updateManifestURL" type="url" placeholder="https://你的域名/windows-update.json"></label>
+        <p class="field-help">填写固定 HTTPS 地址后，后续版本可以直接在软件内下载、校验并升级。</p>
+      </div>
+      <div class="login-card">
+        <div><strong>B 站账号</strong><p id="loginStatus">未扫码登录；仍会默认下载当前可用最高画质。</p></div>
+        <button id="loginButton" type="button" class="secondary">扫码登录</button>
+      </div>
+      <details><summary>下载日志</summary><pre id="logOutput">尚无日志</pre></details>
+      <button id="saveSettingsButton" value="default" class="primary full">完成</button>
+    </form>
+  </dialog>
+
+  <dialog id="loginDialog">
+    <div class="dialog-card login-dialog">
+      <div class="dialog-title"><div><h2>B 站扫码登录</h2><p>请使用哔哩哔哩手机客户端扫码</p></div><button id="closeLoginButton" class="icon-button">×</button></div>
+      <img id="qrImage" alt="B站登录二维码">
+      <p id="qrStatus">正在生成二维码…</p>
+    </div>
+  </dialog>
+
+  <dialog id="updateDialog">
+    <div class="dialog-card update-dialog">
+      <div class="dialog-title"><div><h2>发现新版本 <span id="newVersion"></span></h2><p id="versionComparison"></p></div><button id="closeUpdateButton" class="icon-button">×</button></div>
+      <div id="updateNotes" class="update-notes"></div>
+      <div id="updateProgress" class="update-progress hidden"><div id="updateProgressBar"></div></div>
+      <p id="updateStatus">可以下载更新包。</p>
+      <div class="dialog-actions">
+        <button id="laterUpdateButton" class="secondary">稍后</button>
+        <button id="downloadUpdateButton" class="primary">下载更新</button>
+        <button id="installUpdateButton" class="primary hidden">退出并升级</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
