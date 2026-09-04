@@ -189,6 +189,10 @@ function parseCompletedPath(line) {
   }
 }
 
+function hasCompleteToolset(tools) {
+  return Boolean(tools?.ytdlp && tools?.ffmpeg && tools?.ffprobe && tools?.aria2);
+}
+
 function buildDownloadArguments({ item, destination, settings, tools, outputTemplate }) {
   const args = [
     '--ignore-config', '--no-colors', '--newline', '--continue', '--part',
@@ -222,6 +226,7 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
 
 module.exports = {
   buildDownloadArguments,
+  hasCompleteToolset,
   isPlausibleFinalVideo,
   normalizeThumbnailURL,
   parseBilibiliViewMetadata,

@@ -119,11 +119,12 @@ struct ContentView: View {
     }
 
     private var backendBadge: some View {
-        HStack(spacing: 7) {
+        let complete = model.backend.hasFullQualitySupport && model.backend.hasAccelerationSupport
+        return HStack(spacing: 7) {
             Circle()
-                .fill(model.backend.hasFullQualitySupport ? Color.green : (model.backend.canDownload ? Color.orange : Color.red))
+                .fill(complete ? Color.green : (model.backend.canDownload ? Color.orange : Color.red))
                 .frame(width: 8, height: 8)
-            Text(model.backend.hasFullQualitySupport ? "组件就绪" : "需要准备")
+            Text(complete ? "内置组件就绪" : "内置组件异常")
                 .font(.caption.weight(.medium))
         }
         .padding(.horizontal, 11)
@@ -534,13 +535,13 @@ struct ContentView: View {
     private var compactActionButton: some View {
         if !model.backend.canDownload {
             Button(action: model.prepareTools) {
-                compactActionLabel("准备组件", systemImage: "wrench.and.screwdriver.fill")
+                compactActionLabel("修复组件", systemImage: "wrench.and.screwdriver.fill")
             }
             .buttonStyle(.borderedProminent)
             .tint(.purple)
-        } else if model.backend.ffmpeg == nil || model.backend.ffprobe == nil {
+        } else if model.backend.ffmpeg == nil || model.backend.ffprobe == nil || model.backend.aria2c == nil {
             Button(action: model.prepareTools) {
-                compactActionLabel("补全媒体组件", systemImage: "wand.and.stars")
+                compactActionLabel("修复组件", systemImage: "wand.and.stars")
             }
             .buttonStyle(.borderedProminent)
             .tint(.purple)

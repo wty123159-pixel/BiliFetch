@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 APP_NAME="BiliFetch"
-APP_VERSION="1.5.7"
-APP_BUILD="17"
+APP_VERSION="1.5.8"
+APP_BUILD="18"
 BUILD_DIR="$PROJECT_DIR/.build/release"
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" == "arm64" ]]; then
@@ -53,6 +53,18 @@ for tool_name in yt-dlp ffmpeg ffprobe aria2c; do
         cp "$USER_TOOLS_DIR/$tool_name" "$RESOURCES_DIR/Tools/$tool_name"
     fi
 done
+
+for tool_name in yt-dlp ffmpeg ffprobe aria2c; do
+    if [[ ! -x "$RESOURCES_DIR/Tools/$tool_name" ]]; then
+        print "macOS 发布包缺少内置组件：$tool_name"
+        exit 1
+    fi
+done
+
+"$RESOURCES_DIR/Tools/yt-dlp" --version >/dev/null
+"$RESOURCES_DIR/Tools/ffmpeg" -version >/dev/null 2>&1
+"$RESOURCES_DIR/Tools/ffprobe" -version >/dev/null 2>&1
+"$RESOURCES_DIR/Tools/aria2c" --version >/dev/null
 
 mkdir -p "$RESOURCES_DIR/ThirdPartyLicenses"
 if [[ -f "$VENDOR_TOOLS_DIR/FFmpeg-COPYING.LGPLv2.1" ]]; then

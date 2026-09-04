@@ -25,13 +25,14 @@ function formatDuration(seconds) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function toolsReady(tools) { return Boolean(tools?.ytdlp && tools?.ffmpeg && tools?.ffprobe); }
+function toolsReady(tools) { return Boolean(tools?.ytdlp && tools?.ffmpeg && tools?.ffprobe && tools?.aria2); }
 
 function updateToolStatus(tools) {
   const ready = toolsReady(tools);
   $('#toolStatus').className = `status-pill ${ready ? 'ready' : 'warning'}`;
-  $('#toolStatus').innerHTML = `<i></i>${ready ? '组件就绪' : '需要准备组件'}`;
-  $('#prepareButton').textContent = ready ? '检查/更新组件' : '准备组件';
+  $('#toolStatus').innerHTML = `<i></i>${ready ? '内置组件就绪' : '内置组件异常'}`;
+  $('#prepareButton').textContent = '修复组件';
+  $('#prepareButton').classList.toggle('hidden', ready);
 }
 
 function readSettings() {
@@ -221,11 +222,11 @@ async function startDownloads() {
 
 async function prepareTools() {
   $('#prepareButton').disabled = true;
-  setNotice('正在下载并安装 Windows 版 yt-dlp、FFmpeg 和 aria2；首次准备需要一些时间。');
+  setNotice('正在修复 yt-dlp、FFmpeg 和 aria2；正常完整包无需执行此操作。');
   try {
     const tools = await window.biliFetch.prepareTools();
     updateToolStatus(tools);
-    setNotice('下载组件准备完成。', 'success');
+    setNotice('组件修复完成。', 'success');
   } catch (error) { setNotice(`组件准备失败：${error.message}`, 'error'); }
   finally { $('#prepareButton').disabled = false; }
 }

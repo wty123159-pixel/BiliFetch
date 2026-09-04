@@ -74,3 +74,12 @@ test('download arguments enable resume, fixed merge, cookies and aria2', () => {
   assert.ok(args.includes('aria2c.exe'));
   assert.equal(args.at(-1), 'https://www.bilibili.com/video/BV1x?p=1');
 });
+
+test('requires every bundled command-line component', () => {
+  assert.equal(core.hasCompleteToolset({
+    ytdlp: 'yt-dlp.exe', ffmpeg: 'ffmpeg.exe', ffprobe: 'ffprobe.exe', aria2: 'aria2c.exe'
+  }), true);
+  assert.equal(core.hasCompleteToolset({
+    ytdlp: 'yt-dlp.exe', ffmpeg: 'ffmpeg.exe', ffprobe: 'ffprobe.exe'
+  }), false);
+});

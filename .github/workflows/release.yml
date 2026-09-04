@@ -27,6 +27,12 @@ jobs:
         with:
           version: 11
 
+      - name: Cache bundled Windows tools
+        uses: actions/cache@v4
+        with:
+          path: build/windows-tools-cache
+          key: windows-tools-${{ hashFiles('scripts/prepare-windows-tools.sh') }}
+
       - name: Configure the stable update channel
         env:
           UPDATE_URL: https://github.com/${{ github.repository }}/releases/latest/download/update.json

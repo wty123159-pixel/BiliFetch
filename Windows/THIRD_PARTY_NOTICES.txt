@@ -15,15 +15,15 @@ Copyright soldair and contributors
 MIT License
 https://github.com/soldair/node-qrcode
 
-BiliFetch can download the following optional command-line tools at the user's
-request. They are stored in the current user's BiliFetch data directory and are
-not bundled in the portable ZIP:
+BiliFetch bundles the following command-line tools as separate executables in
+the portable ZIP. The application invokes them only for their documented tasks.
+If a bundled file is missing, the repair action can restore a user-local copy:
 
 yt-dlp - The Unlicense
 https://github.com/yt-dlp/yt-dlp
 
-FFmpeg Windows builds by BtbN - GPL build; see the license files in the
-downloaded archive and the FFmpeg project for the applicable terms.
+FFmpeg Windows builds by BtbN - LGPL build; see the FFmpeg project for the
+applicable terms and corresponding source information.
 https://github.com/BtbN/FFmpeg-Builds
 https://ffmpeg.org/
 

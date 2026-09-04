@@ -16,8 +16,8 @@ const updateCore = require('./update-core');
 
 const APP_VERSION = require('./package.json').version;
 const TOOL_URLS = {
-  ytdlp: 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
-  ffmpeg: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip',
+  ytdlp: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe',
+  ffmpeg: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-02-13-13/ffmpeg-n9.0.1-11-ge47273f4d9-win64-lgpl-shared-9.0.zip',
   aria2: 'https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip'
 };
 
@@ -88,11 +88,27 @@ async function locateTools() {
   for (const [key, name] of Object.entries(names)) {
     for (const folder of candidates) {
       const candidate = path.join(folder, name);
-      if (fs.existsSync(candidate)) { tools[key] = candidate; break; }
+      if (await executableIsHealthy(candidate, key)) { tools[key] = candidate; break; }
     }
-    if (!tools[key]) tools[key] = await executableOnPath(name);
+    if (!tools[key]) {
+      const external = await executableOnPath(name);
+      if (external && await executableIsHealthy(external, key)) tools[key] = external;
+    }
   }
   return tools;
+}
+
+async function executableIsHealthy(executable, key) {
+  if (!executable || !fs.existsSync(executable)) return false;
+  try {
+    const argumentsByTool = {
+      ytdlp: ['--version'], ffmpeg: ['-version'], ffprobe: ['-version'], aria2: ['--version']
+    };
+    const result = await runProcess(executable, argumentsByTool[key] || ['--version']);
+    return result.code === 0;
+  } catch {
+    return false;
+  }
 }
 
 function downloadFile(url, destination, label, onProgress = null) {
@@ -147,21 +163,28 @@ async function prepareTools() {
   await fsp.mkdir(toolDir, { recursive: true });
   try {
     const ytdlp = path.join(toolDir, 'yt-dlp.exe');
-    if (!fs.existsSync(ytdlp)) await downloadFile(TOOL_URLS.ytdlp, ytdlp, 'yt-dlp');
+    if (!await executableIsHealthy(ytdlp, 'ytdlp')) await downloadFile(TOOL_URLS.ytdlp, ytdlp, 'yt-dlp');
 
-    if (!fs.existsSync(path.join(toolDir, 'ffmpeg.exe')) || !fs.existsSync(path.join(toolDir, 'ffprobe.exe'))) {
+    if (!await executableIsHealthy(path.join(toolDir, 'ffmpeg.exe'), 'ffmpeg') ||
+        !await executableIsHealthy(path.join(toolDir, 'ffprobe.exe'), 'ffprobe')) {
       const archive = path.join(tempDir, 'ffmpeg.zip');
       const unpacked = path.join(tempDir, 'ffmpeg');
       await downloadFile(TOOL_URLS.ffmpeg, archive, 'FFmpeg');
       await extract(archive, { dir: unpacked });
-      for (const name of ['ffmpeg.exe', 'ffprobe.exe']) {
-        const found = await findFile(unpacked, name);
-        if (!found) throw new Error(`FFmpeg 压缩包中缺少 ${name}`);
-        await fsp.copyFile(found, path.join(toolDir, name));
+      const ffmpegExecutable = await findFile(unpacked, 'ffmpeg.exe');
+      const ffprobeExecutable = await findFile(unpacked, 'ffprobe.exe');
+      if (!ffmpegExecutable || !ffprobeExecutable) throw new Error('FFmpeg 压缩包缺少媒体组件。');
+      const runtimeDirectory = path.dirname(ffmpegExecutable);
+      const runtimeFiles = await fsp.readdir(runtimeDirectory, { withFileTypes: true });
+      for (const entry of runtimeFiles) {
+        const lower = entry.name.toLowerCase();
+        if (entry.isFile() && (lower.endsWith('.dll') || lower === 'ffmpeg.exe' || lower === 'ffprobe.exe')) {
+          await fsp.copyFile(path.join(runtimeDirectory, entry.name), path.join(toolDir, entry.name));
+        }
       }
     }
 
-    if (!fs.existsSync(path.join(toolDir, 'aria2c.exe'))) {
+    if (!await executableIsHealthy(path.join(toolDir, 'aria2c.exe'), 'aria2')) {
       const archive = path.join(tempDir, 'aria2.zip');
       const unpacked = path.join(tempDir, 'aria2');
       await downloadFile(TOOL_URLS.aria2, archive, 'aria2');
@@ -171,7 +194,7 @@ async function prepareTools() {
       await fsp.copyFile(found, path.join(toolDir, 'aria2c.exe'));
     }
     const tools = await locateTools();
-    if (!tools.ytdlp || !tools.ffmpeg || !tools.ffprobe) throw new Error('组件安装后仍未通过完整性检查。');
+    if (!core.hasCompleteToolset(tools)) throw new Error('组件修复后仍未通过完整性检查。');
     return tools;
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true });
@@ -214,7 +237,7 @@ async function resolveCollection(sourceURL, settings = {}) {
     }
   }
   const tools = await locateTools();
-  if (!tools.ytdlp) throw new Error('尚未安装 yt-dlp，请先点击“准备组件”。');
+  if (!tools.ytdlp) throw new Error('内置 yt-dlp 异常，请点击“修复组件”。');
   const args = [
     '--ignore-config', '--no-colors', '--newline', '--skip-download',
     '--ignore-no-formats-error', '--yes-playlist', '--no-warnings',
@@ -301,8 +324,8 @@ class DownloadManager {
   async start(payload) {
     if (this.active.size) throw new Error('已有下载任务正在运行。');
     const tools = await locateTools();
-    if (!tools.ytdlp || !tools.ffmpeg || !tools.ffprobe) throw new Error('下载组件不完整，请先点击“准备组件”。');
-    if (payload.settings.engine === 'aria2' && !tools.aria2) throw new Error('aria2 未安装，请重新准备组件或切换标准引擎。');
+    if (!tools.ytdlp || !tools.ffmpeg || !tools.ffprobe) throw new Error('内置下载组件异常，请点击“修复组件”。');
+    if (payload.settings.engine === 'aria2' && !tools.aria2) throw new Error('内置 aria2 异常，请修复组件或切换标准引擎。');
     this.preview = payload.preview;
     this.destination = payload.destination;
     this.settings = { ...payload.settings, concurrency: Math.max(1, Math.min(5, Number(payload.settings.concurrency) || 3)) };
