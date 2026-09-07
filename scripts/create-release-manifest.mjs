@@ -10,7 +10,7 @@ const options = {};
 for (let index = 0; index < pairs.length; index += 2) options[pairs[index]] = pairs[index + 1];
 for (const required of ['--windows', '--windows-url', '--macos', '--macos-url', '--output']) {
   if (!options[required]) {
-    console.error('用法: node scripts/create-release-manifest.mjs --windows <zip> --windows-url <https> --macos <zip> --macos-url <https> [--windows-delta <zip> --windows-delta-url <https>] [--macos-delta <zip> --macos-delta-url <https>] [--notes <文件>] --output <json>');
+    console.error('用法: node scripts/create-release-manifest.mjs --windows <zip> --windows-url <https> --macos <zip> --macos-url <https> [--windows-delta <zip> --windows-delta-url <https>] [--macos-delta <zip> --macos-delta-url <https>] [--notes <文件>] [--history <历史文件>] [--previous-manifest <上一版清单>] --output <json>');
     process.exit(2);
   }
 }
@@ -64,6 +64,59 @@ async function deltaArtifact(fileArgument, url, expression, label, expectedVersi
   };
 }
 
+function parseVersion(value, label) {
+  const match = String(value || '').trim().replace(/^v/i, '').match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) throw new Error(`${label}版本号格式无效。`);
+  return { value: match.slice(1).join('.'), components: match.slice(1).map(Number) };
+}
+
+function compareVersions(left, right) {
+  const a = parseVersion(left, '更新历史').components;
+  const b = parseVersion(right, '更新历史').components;
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
+async function optionalJSON(fileArgument, label) {
+  if (!fileArgument) return null;
+  try {
+    return JSON.parse(await readFile(path.resolve(fileArgument), 'utf8'));
+  } catch (error) {
+    throw new Error(`无法读取${label}：${error.message}`);
+  }
+}
+
+function normalizeHistory(value, label) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error(`${label}必须是数组。`);
+  return value.map((entry) => {
+    const version = parseVersion(entry?.version, label).value;
+    const entryNotes = String(entry?.notes || '').trim();
+    if (!entryNotes) throw new Error(`${label}中的 v${version} 缺少更新内容。`);
+    const publishedAt = String(entry?.publishedAt || '').trim();
+    return { version, notes: entryNotes, ...(publishedAt ? { publishedAt } : {}) };
+  });
+}
+
+function mergedHistory(platform, releaseVersion, currentNotes, publishedAt, seed, previous) {
+  const entries = new Map();
+  const candidates = [
+    ...normalizeHistory(seed?.[platform], `${platform}种子更新历史`),
+    ...normalizeHistory(previous?.[platform]?.history, `${platform}上一版更新历史`)
+  ];
+  for (const entry of candidates) {
+    if (compareVersions(entry.version, releaseVersion) <= 0) entries.set(entry.version, entry);
+  }
+  entries.set(releaseVersion, { version: releaseVersion, notes: currentNotes, publishedAt });
+  return [...entries.values()].sort((left, right) => compareVersions(left.version, right.version));
+}
+
+function formatHistory(history) {
+  return history.map((entry) => `v${entry.version}\n${entry.notes}`).join('\n\n');
+}
+
 const windows = await artifact(
   options['--windows'], options['--windows-url'],
   /BiliFetch-Windows-x64-(\d+\.\d+\.\d+)\.zip$/, 'Windows'
@@ -81,17 +134,27 @@ const macosDelta = await deltaArtifact(
   /BiliFetch-macOS-delta-(\d+\.\d+\.\d+)-to-(\d+\.\d+\.\d+)\.zip$/, 'macOS', macos.version
 );
 const notes = options['--notes'] ? (await readFile(path.resolve(options['--notes']), 'utf8')).trim() : 'BiliFetch 双平台更新';
+if (!notes) throw new Error('本次更新内容不能为空。');
+const historySeed = await optionalJSON(options['--history'], '种子更新历史');
+const previousManifest = await optionalJSON(options['--previous-manifest'], '上一版更新清单');
+const publishedAt = new Date().toISOString();
+const windowsHistory = mergedHistory('windows', windows.version, notes, publishedAt, historySeed, previousManifest);
+const macosHistory = mergedHistory('macos', macos.version, notes, publishedAt, historySeed, previousManifest);
 const manifest = {
-  schemaVersion: 2,
-  publishedAt: new Date().toISOString(),
+  schemaVersion: 3,
+  publishedAt,
   version: windows.version,
-  notes,
+  // Old Windows clients only understand this top-level field, so keep the
+  // complete accumulated Windows history here as a compatibility fallback.
+  notes: formatHistory(windowsHistory),
   windows: {
     url: windows.url, sha256: windows.sha256, size: windows.size,
+    notes: formatHistory(windowsHistory), history: windowsHistory,
     ...(windowsDelta ? { deltas: [windowsDelta] } : {})
   },
   macos: {
     version: macos.version, url: macos.url, sha256: macos.sha256, size: macos.size,
+    notes: formatHistory(macosHistory), history: macosHistory,
     ...(macosDelta ? { deltas: [macosDelta] } : {})
   }
 };

@@ -59,6 +59,12 @@ enum UpdateProgressParser {
 }
 
 struct AppUpdateManifest: Decodable {
+    struct HistoryEntry: Decodable {
+        let version: String
+        let notes: String
+        let publishedAt: String?
+    }
+
     struct Delta: Decodable {
         let fromVersion: String
         let url: String
@@ -73,6 +79,7 @@ struct AppUpdateManifest: Decodable {
         let sha256: String
         let size: Int64?
         let deltas: [Delta]?
+        let history: [HistoryEntry]?
     }
 
     let version: String?
@@ -111,14 +118,62 @@ struct AppUpdateManifest: Decodable {
                 size: delta.size ?? 0
             )
         }
+        let fallbackNotes = macos.notes ?? notes ?? "本次更新暂无说明。"
         return AppUpdateRelease(
             version: releaseVersion.trimmingCharacters(in: CharacterSet(charactersIn: "vV")),
-            notes: macos.notes ?? notes ?? "本次更新暂无说明。",
+            notes: Self.notesForUpgrade(
+                history: macos.history,
+                currentVersion: currentVersion,
+                releaseVersion: releaseVersion,
+                fallback: fallbackNotes
+            ),
             url: url,
             sha256: digest,
             size: macos.size ?? 0,
             delta: matchingDelta
         )
+    }
+
+    private static func notesForUpgrade(
+        history: [HistoryEntry]?,
+        currentVersion: String?,
+        releaseVersion: String,
+        fallback: String
+    ) -> String {
+        let cleanFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let currentVersion,
+              AppVersion.components(currentVersion) != nil,
+              AppVersion.components(releaseVersion) != nil else {
+            return cleanFallback.isEmpty ? "本次更新暂无说明。" : cleanFallback
+        }
+
+        var entriesByVersion: [String: String] = [:]
+        for entry in history ?? [] {
+            let version = entry.version.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+            let notes = entry.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !notes.isEmpty,
+                  AppVersion.components(version) != nil,
+                  (try? AppVersion.compare(version, currentVersion)) == .orderedDescending,
+                  let latestComparison = try? AppVersion.compare(version, releaseVersion),
+                  latestComparison != .orderedDescending else { continue }
+            entriesByVersion[version] = notes
+        }
+
+        let cleanReleaseVersion = releaseVersion.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        if entriesByVersion[cleanReleaseVersion] == nil,
+           !cleanFallback.isEmpty,
+           (try? AppVersion.compare(cleanReleaseVersion, currentVersion)) == .orderedDescending {
+            entriesByVersion[cleanReleaseVersion] = cleanFallback
+        }
+        let orderedVersions = entriesByVersion.keys.sorted {
+            (try? AppVersion.compare($0, $1)) == .orderedAscending
+        }
+        guard !orderedVersions.isEmpty else {
+            return cleanFallback.isEmpty ? "本次更新暂无说明。" : cleanFallback
+        }
+        return orderedVersions.map { version in
+            "v\(version)\n\(entriesByVersion[version] ?? "")"
+        }.joined(separator: "\n\n")
     }
 }
 

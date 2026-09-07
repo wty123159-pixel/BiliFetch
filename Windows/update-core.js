@@ -41,6 +41,26 @@ function manifestURLs(channel, fallback) {
   });
 }
 
+function notesForUpgrade(history, currentVersion, releaseVersion, fallback) {
+  const cleanFallback = String(fallback || '').trim();
+  if (!parseVersion(currentVersion) || !parseVersion(releaseVersion)) return cleanFallback;
+  const entries = new Map();
+  for (const item of Array.isArray(history) ? history : []) {
+    const version = String(item?.version || '').trim().replace(/^v/i, '');
+    const notes = String(item?.notes || '').trim();
+    if (!parseVersion(version) || !notes) continue;
+    if (compareVersions(version, currentVersion) <= 0 || compareVersions(version, releaseVersion) > 0) continue;
+    entries.set(version, notes);
+  }
+  const cleanReleaseVersion = String(releaseVersion).replace(/^v/i, '');
+  if (!entries.has(cleanReleaseVersion) && cleanFallback && compareVersions(cleanReleaseVersion, currentVersion) > 0) {
+    entries.set(cleanReleaseVersion, cleanFallback);
+  }
+  const versions = [...entries.keys()].sort(compareVersions);
+  if (!versions.length) return cleanFallback;
+  return versions.map((version) => `v${version}\n${entries.get(version)}`).join('\n\n');
+}
+
 function validateManifest(payload, currentVersion = '') {
   if (!payload || typeof payload !== 'object') throw new Error('更新清单格式无效。');
   if (!parseVersion(payload.version)) throw new Error('更新清单缺少有效版本号。');
@@ -64,9 +84,13 @@ function validateManifest(payload, currentVersion = '') {
       };
     }
   }
+  const rawNotes = String(windows.notes || payload.notes || '');
+  const history = Array.isArray(windows.history) ? windows.history : [];
   return {
     version: String(payload.version).replace(/^v/i, ''),
-    notes: String(payload.notes || ''),
+    notes: notesForUpgrade(history, currentVersion, payload.version, rawNotes),
+    rawNotes,
+    history,
     publishedAt: String(payload.publishedAt || ''),
     url: validateHTTPSURL(windows.url, '更新包地址'),
     sha256,
@@ -142,7 +166,44 @@ function validateDeltaPlan(payload, currentVersion, targetVersion) {
   return { formatVersion: 1, platform: 'windows', fromVersion: String(payload.fromVersion), toVersion: String(payload.toVersion), files, deletePaths };
 }
 
+function createWindowsInstallScript() {
+  return [
+    'param([string]$Source, [string]$Target, [string]$Executable, [int]$ProcessId, [string]$LogFile, [string]$LockDirectory)',
+    "$ErrorActionPreference = 'Stop'",
+    '$Backup = "$Target.update-backup"',
+    '$HadBackup = $false',
+    '$HasLock = $false',
+    'try {',
+    '  New-Item -ItemType Directory -Path $LockDirectory -ErrorAction Stop | Out-Null',
+    '  $HasLock = $true',
+    '  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue',
+    '  Start-Sleep -Milliseconds 1200',
+    '  if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }',
+    '  if (Test-Path -LiteralPath $Target) {',
+    '    Move-Item -LiteralPath $Target -Destination $Backup',
+    '    $HadBackup = $true',
+    '  }',
+    '  New-Item -ItemType Directory -Path $Target -Force | Out-Null',
+    "  Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force",
+    '  Start-Process -FilePath (Join-Path $Target $Executable)',
+    '  Start-Sleep -Milliseconds 800',
+    '  Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue',
+    "  'Update installed successfully.' | Out-File -LiteralPath $LogFile -Encoding utf8",
+    '} catch {',
+    '  $_ | Out-File -LiteralPath $LogFile -Encoding utf8',
+    '  if ($HadBackup -and (Test-Path -LiteralPath $Backup)) {',
+    '    Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue',
+    '    Move-Item -LiteralPath $Backup -Destination $Target -Force',
+    '    Start-Process -FilePath (Join-Path $Target $Executable)',
+    '  }',
+    '} finally {',
+    '  if ($HasLock) { Remove-Item -LiteralPath $LockDirectory -Recurse -Force -ErrorAction SilentlyContinue }',
+    '  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue',
+    '}'
+  ].join('\r\n');
+}
+
 module.exports = {
-  compareVersions, isSafeRelativePath, manifestURLs, parseVersion,
+  compareVersions, createWindowsInstallScript, isSafeRelativePath, manifestURLs, notesForUpgrade, parseVersion,
   validateDeltaPlan, validateHTTPSURL, validateManifest
 };

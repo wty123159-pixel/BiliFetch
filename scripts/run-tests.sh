@@ -9,6 +9,7 @@ mkdir -p "$PROJECT_DIR/.build"
 swiftc \
     "$PROJECT_DIR/Sources/BiliFetch/DownloadOptions.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/Aria2ProgressMonitor.swift" \
+    "$PROJECT_DIR/Sources/BiliFetch/MacUpdateInstallScript.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/CollectionModels.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/AppUpdateModels.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/ProcessRunner.swift" \

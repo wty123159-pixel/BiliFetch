@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 
 private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate {
@@ -56,6 +57,7 @@ final class MacAppUpdater: ObservableObject {
         case available
         case downloading
         case ready
+        case installing
         case current
         case failed
     }
@@ -93,7 +95,7 @@ final class MacAppUpdater: ObservableObject {
     }
 
     func check(silent: Bool = false) {
-        guard phase != .checking, phase != .downloading else { return }
+        guard phase != .checking, phase != .downloading, phase != .installing else { return }
         let sources = bundledManifestURLs
         guard !sources.isEmpty else {
             if !silent { fail(AppUpdateError.notConfigured) }
@@ -239,7 +241,7 @@ final class MacAppUpdater: ObservableObject {
     }
 
     func install() {
-        guard let stagedAppURL else { return }
+        guard phase == .ready, let stagedAppURL else { return }
         let target = Bundle.main.bundleURL
         guard target.pathExtension.lowercased() == "app" else {
             fail(AppUpdateError.developmentBuild)
@@ -251,45 +253,38 @@ final class MacAppUpdater: ObservableObject {
         }
 
         do {
+            phase = .installing
+            statusText = "正在启动安装器，应用即将退出并自动重新打开…"
             let helper = Self.updateRoot.appendingPathComponent("install-update-\(UUID().uuidString).zsh")
             let log = Self.updateRoot.appendingPathComponent("update-install.log")
-            let script = """
-            #!/bin/zsh
-            set -u
-            source_app="$1"
-            target_app="$2"
-            running_pid="$3"
-            log_file="$4"
-            backup_app="${target_app}.update-backup"
-            while /bin/kill -0 "$running_pid" 2>/dev/null; do /bin/sleep 0.2; done
-            /bin/rm -rf -- "$backup_app"
-            if /bin/mv -- "$target_app" "$backup_app" >>"$log_file" 2>&1 && \
-               /usr/bin/ditto "$source_app" "$target_app" >>"$log_file" 2>&1 && \
-               /usr/bin/open "$target_app" >>"$log_file" 2>&1; then
-                /bin/rm -rf -- "$backup_app"
-                print "Update installed successfully." >>"$log_file"
-            else
-                print "Update installation failed." >>"$log_file"
-                /bin/rm -rf -- "$target_app"
-                if [[ -d "$backup_app" ]]; then
-                    /bin/mv -- "$backup_app" "$target_app"
-                    /usr/bin/open "$target_app"
-                fi
-            fi
-            /bin/rm -- "$0"
-            """
+            let lock = Self.updateRoot.appendingPathComponent("install-update.lock", isDirectory: true)
+            let script = MacUpdateInstallScript.text
             try FileManager.default.createDirectory(at: Self.updateRoot, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: lock)
             try script.write(to: helper, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
 
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = [helper.path, stagedAppURL.path, target.path, String(ProcessInfo.processInfo.processIdentifier), log.path]
+            process.arguments = [
+                helper.path,
+                stagedAppURL.path,
+                target.path,
+                String(ProcessInfo.processInfo.processIdentifier),
+                log.path,
+                lock.path
+            ]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
             try process.run()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 NSApplication.shared.terminate(nil)
+            }
+            // A modal sheet or an unexpected AppKit termination veto must not
+            // leave the helper waiting forever. This callback only runs if the
+            // normal termination above did not already end the process.
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2.0) {
+                Darwin._exit(EXIT_SUCCESS)
             }
         } catch {
             fail(error)
@@ -297,7 +292,7 @@ final class MacAppUpdater: ObservableObject {
     }
 
     func dismiss() {
-        if phase != .downloading { phase = .idle }
+        if phase != .downloading, phase != .installing { phase = .idle }
     }
 
     private func verifyAndStage(_ archive: URL, release: AppUpdateRelease, asset: AppUpdateAsset) {

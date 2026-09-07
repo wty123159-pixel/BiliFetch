@@ -338,9 +338,18 @@ async function downloadUpdate() {
 
 async function installUpdate() {
   $('#installUpdateButton').disabled = true;
+  $('#laterUpdateButton').disabled = true;
+  $('#closeUpdateButton').disabled = true;
   $('#updateStatus').textContent = '正在准备退出并升级…';
-  try { await window.biliFetch.installUpdate(); }
-  catch (error) { $('#installUpdateButton').disabled = false; $('#updateStatus').textContent = `无法安装更新：${error.message}`; }
+  try {
+    await window.biliFetch.installUpdate();
+    $('#updateStatus').textContent = '安装器已启动，正在退出并重新打开新版…';
+  } catch (error) {
+    $('#installUpdateButton').disabled = false;
+    $('#laterUpdateButton').disabled = false;
+    $('#closeUpdateButton').disabled = false;
+    $('#updateStatus').textContent = `无法安装更新：${error.message}`;
+  }
 }
 
 function bindEvents() {

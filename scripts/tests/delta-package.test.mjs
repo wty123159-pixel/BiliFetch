@@ -101,9 +101,21 @@ test('writes backward-compatible full assets and optional deltas to update.json'
     const macos = path.join(temp, 'BiliFetch-macOS-1.5.11.zip');
     const macosDelta = path.join(temp, 'BiliFetch-macOS-delta-1.5.10-to-1.5.11.zip');
     const output = path.join(temp, 'update.json');
+    const history = path.join(temp, 'release-history.json');
+    const previousManifest = path.join(temp, 'previous-update.json');
+    const notes = path.join(temp, 'release-notes.txt');
     await Promise.all([
       writeFile(windows, 'windows full'), writeFile(windowsDelta, 'windows delta'),
-      writeFile(macos, 'mac full'), writeFile(macosDelta, 'mac delta')
+      writeFile(macos, 'mac full'), writeFile(macosDelta, 'mac delta'),
+      writeFile(notes, '本次版本说明'),
+      writeFile(history, JSON.stringify({
+        windows: [{ version: '1.1.2', notes: '种子 Windows 说明' }],
+        macos: [{ version: '1.5.9', notes: '种子 macOS 说明' }]
+      })),
+      writeFile(previousManifest, JSON.stringify({
+        windows: { history: [{ version: '1.1.3', notes: '上一版 Windows 说明' }] },
+        macos: { history: [{ version: '1.5.10', notes: '上一版 macOS 说明' }] }
+      }))
     ]);
     await run(process.execPath, [
       manifestGenerator,
@@ -111,14 +123,20 @@ test('writes backward-compatible full assets and optional deltas to update.json'
       '--windows-delta', windowsDelta, '--windows-delta-url', 'https://example.com/windows-delta.zip',
       '--macos', macos, '--macos-url', 'https://example.com/macos-full.zip',
       '--macos-delta', macosDelta, '--macos-delta-url', 'https://example.com/macos-delta.zip',
+      '--notes', notes, '--history', history, '--previous-manifest', previousManifest,
       '--output', output
     ]);
     const manifest = JSON.parse(await readFile(output, 'utf8'));
-    assert.equal(manifest.schemaVersion, 2);
+    assert.equal(manifest.schemaVersion, 3);
     assert.equal(manifest.windows.url, 'https://example.com/windows-full.zip');
     assert.equal(manifest.windows.deltas[0].fromVersion, '1.1.3');
+    assert.deepEqual(manifest.windows.history.map((entry) => entry.version), ['1.1.2', '1.1.3', '1.1.4']);
+    assert.equal(manifest.windows.history.at(-1).notes, '本次版本说明');
+    assert.match(manifest.notes, /v1\.1\.2[\s\S]*v1\.1\.4/);
     assert.equal(manifest.macos.version, '1.5.11');
     assert.equal(manifest.macos.deltas[0].fromVersion, '1.5.10');
+    assert.deepEqual(manifest.macos.history.map((entry) => entry.version), ['1.5.9', '1.5.10', '1.5.11']);
+    assert.match(manifest.macos.notes, /v1\.5\.9[\s\S]*v1\.5\.11/);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

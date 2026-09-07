@@ -47,7 +47,8 @@ jobs:
           gh release download \
             --dir build/previous-release \
             --pattern 'BiliFetch-macOS-[0-9]*.zip' \
-            --pattern 'BiliFetch-Windows-x64-[0-9]*.zip' || true
+            --pattern 'BiliFetch-Windows-x64-[0-9]*.zip' \
+            --pattern 'update.json' || true
 
       - name: Test both platforms
         run: |
@@ -99,8 +100,12 @@ jobs:
             --macos "$MAC_ZIP"
             --macos-url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$MAC_NAME"
             --notes dist/release-notes.txt
+            --history Updates/release-history.json
             --output dist/update.json
           )
+          if [ -f build/previous-release/update.json ]; then
+            ARGS+=(--previous-manifest build/previous-release/update.json)
+          fi
           WIN_DELTA="$(find dist -maxdepth 1 -name 'BiliFetch-Windows-x64-delta-*.zip' | sort | tail -n 1)"
           MAC_DELTA="$(find dist -maxdepth 1 -name 'BiliFetch-macOS-delta-*.zip' | sort | tail -n 1)"
           if [ -n "$WIN_DELTA" ]; then

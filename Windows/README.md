@@ -4,7 +4,7 @@
 
 ## 使用
 
-1. 解压整个 `BiliFetch-Windows-x64-1.1.4.zip`，不要只复制其中的 `BiliFetch.exe`。
+1. 解压整个 `BiliFetch-Windows-x64-1.1.6.zip`，不要只复制其中的 `BiliFetch.exe`。
 2. 双击 `BiliFetch.exe`。
 3. 软件会自动检测并调用包内的 yt-dlp、FFmpeg、FFprobe 和 aria2，不需要联网安装环境或管理员权限。
 4. 粘贴链接并等待分集预览，选择保存位置和需要的分集，然后点击“开始下载”。只有组件被删除或损坏时，界面才会显示“修复组件”。
@@ -19,7 +19,7 @@
 ./scripts/build-windows.sh
 ```
 
-构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.4.zip`。
+构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.6.zip`。
 
 ## 在线升级发布
 
@@ -28,6 +28,10 @@ Windows 1.1.0 起支持便携版应用内升级。更新包会先下载到当前
 Windows 1.1.2 起，更新清单地址完全内置且不在界面展示。软件每次启动自动检查一次；没有新版或检查失败时不会影响使用，发现新版才弹出确认窗口。安装包优先使用内置 aria2 的 8 连接下载，失败后自动切换标准下载。
 
 Windows 1.1.3 起支持文件级增量升级。只有清单中存在与当前版本精确匹配的增量包时才使用；版本不匹配、下载失败、SHA-256 不一致或增量文件校验失败时，会自动改用完整 ZIP。安装前会在用户数据目录生成完整的待替换副本，替换失败则恢复旧程序，设置、Cookie 和下载任务不受影响。
+
+Windows 1.1.5 起，点击“退出并升级”后会立即锁定安装操作、显示退出状态，并在正常退出失效时自动强制结束旧进程。安装器只允许一个实例替换程序，避免重复点击造成多个安装器互相覆盖。
+
+Windows 1.1.6 起，更新窗口会根据当前版本显示所有尚未安装版本的说明，并按版本从旧到新排列。发布清单自动继承历史，旧客户端仍可读取累计说明。
 
 Windows 1.1.0 与 macOS 1.5.7 起共用一个长期不变、可公开访问的 HTTPS 清单地址：
 
@@ -41,11 +45,13 @@ https://github.com/你的用户名/BiliFetch/releases/latest/download/update.jso
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.2.0.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.2.0.zip \
-  --macos dist/BiliFetch-macOS-1.5.10.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.10.zip \
+  --windows dist/BiliFetch-Windows-x64-1.1.6.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.6.zip \
+  --macos dist/BiliFetch-macOS-1.5.13.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.13.zip \
   --notes release-notes.txt \
+  --history Updates/release-history.json \
+  --previous-manifest previous/update.json \
   --output dist/update.json
 ```
 

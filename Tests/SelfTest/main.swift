@@ -270,16 +270,24 @@ do {
     let equalComparison = try AppVersion.compare("v1.5.7", "1.5.7")
     check(newerComparison == .orderedDescending, "detects a newer macOS version")
     check(equalComparison == .orderedSame, "accepts an optional version prefix")
-    let updateJSON = #"{"schemaVersion":2,"version":"1.1.0","notes":"同步更新","windows":{"url":"https://example.com/win.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":100},"macos":{"version":"1.5.7","url":"https://example.com/mac.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":200,"deltas":[{"fromVersion":"1.5.6","url":"https://example.com/mac-delta.zip","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","size":20}]}}"#.data(using: .utf8)!
+    let updateJSON = #"{"schemaVersion":3,"version":"1.1.4","notes":"最新版说明","windows":{"url":"https://example.com/win.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":100},"macos":{"version":"1.5.11","url":"https://example.com/mac.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":200,"history":[{"version":"1.5.8","notes":"已经安装的版本"},{"version":"1.5.9","notes":"自动更新优化"},{"version":"1.5.10","notes":"合集解析修复"},{"version":"1.5.11","notes":"实时下载进度"},{"version":"1.5.12","notes":"未来版本不应显示"}],"deltas":[{"fromVersion":"1.5.8","url":"https://example.com/mac-delta.zip","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","size":20}]}}"#.data(using: .utf8)!
     let manifest = try JSONDecoder().decode(AppUpdateManifest.self, from: updateJSON)
-    let release = try manifest.macOSRelease(currentVersion: "1.5.6")
-    check(release.version == "1.5.7", "reads the platform-specific macOS version")
+    let release = try manifest.macOSRelease(currentVersion: "1.5.8")
+    check(release.version == "1.5.11", "reads the platform-specific macOS version")
     check(release.url.scheme == "https", "requires an HTTPS macOS update package")
     check(release.sha256.count == 64, "requires a full macOS SHA-256")
-    check(release.delta?.fromVersion == "1.5.6", "selects an exact-version macOS delta")
+    check(release.delta?.fromVersion == "1.5.8", "selects an exact-version macOS delta")
     check(release.preferredAsset.kind == .delta, "prefers a matching incremental package")
-    let fallback = try manifest.macOSRelease(currentVersion: "1.5.5")
+    check(!release.notes.contains("v1.5.8") && release.notes.contains("v1.5.9"), "excludes the currently installed version from macOS update history")
+    check(release.notes.contains("v1.5.10") && release.notes.contains("v1.5.11"), "shows every intermediate macOS release note")
+    check(!release.notes.contains("v1.5.12"), "excludes history newer than the offered macOS release")
+    check(release.notes.range(of: "v1.5.9")!.lowerBound < release.notes.range(of: "v1.5.11")!.lowerBound, "orders macOS update history from oldest to newest")
+    let fallback = try manifest.macOSRelease(currentVersion: "1.5.7")
     check(fallback.delta == nil && fallback.preferredAsset.kind == .full, "falls back to the full package without an exact delta")
+
+    let legacyJSON = #"{"version":"1.1.0","notes":"旧清单仍然可用","macos":{"version":"1.5.7","url":"https://example.com/mac.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#.data(using: .utf8)!
+    let legacy = try JSONDecoder().decode(AppUpdateManifest.self, from: legacyJSON).macOSRelease(currentVersion: "1.5.6")
+    check(legacy.notes.contains("旧清单仍然可用"), "keeps legacy update manifests compatible")
 } catch {
     check(false, "parses the shared cross-platform update manifest: \(error.localizedDescription)")
 }
@@ -339,6 +347,21 @@ func runProcess(_ executable: String, arguments: [String]) -> (Int32?, [String])
     guard semaphore.wait(timeout: .now() + 5) == .success else { return (nil, ["timeout"]) }
     return (code, lines)
 }
+
+let installScriptURL = FileManager.default.temporaryDirectory
+    .appendingPathComponent("bilifetch-install-script-\(UUID().uuidString).zsh")
+do {
+    try MacUpdateInstallScript.text.write(to: installScriptURL, atomically: true, encoding: .utf8)
+    let syntaxCheck = runProcess("/bin/zsh", arguments: ["-n", installScriptURL.path])
+    check(syntaxCheck.0 == 0, "keeps the locked macOS update helper syntactically valid")
+    check(MacUpdateInstallScript.text.contains("install-update.lock") == false, "passes the install lock path as an argument")
+    check(MacUpdateInstallScript.text.contains("/bin/mkdir \"$lock_dir\""), "prevents concurrent macOS update helpers")
+    check(MacUpdateInstallScript.text.contains("script_path=\"$0\""), "preserves the macOS update helper path before cleanup")
+    check(MacUpdateInstallScript.text.contains("/bin/rm -f -- \"$script_path\""), "removes the preserved macOS update helper path")
+} catch {
+    check(false, "writes the macOS update helper for syntax validation")
+}
+try? FileManager.default.removeItem(at: installScriptURL)
 
 let failedRun = runProcess("/usr/bin/false", arguments: [])
 check(failedRun.0 != nil && failedRun.0 != 0, "observes a failed process")

@@ -805,6 +805,7 @@ class AppUpdater {
   constructor() {
     this.available = null;
     this.stagedRoot = null;
+    this.installing = false;
   }
 
   async check() {
@@ -837,11 +838,12 @@ class AppUpdater {
     if (!release) throw new Error('没有可下载的新版本。');
     const checked = updateCore.validateManifest({
       version: release.version,
-      notes: release.notes,
+      notes: release.rawNotes || release.notes,
       publishedAt: release.publishedAt,
       windows: {
         url: release.url, sha256: release.sha256, size: release.size,
-        deltas: release.delta ? [release.delta] : []
+        deltas: release.delta ? [release.delta] : [],
+        history: release.history || []
       }
     }, APP_VERSION);
     const updateDir = userDataPath('Updates', checked.version);
@@ -923,51 +925,39 @@ class AppUpdater {
   }
 
   async install() {
+    if (this.installing) return { installing: true };
     if (!this.stagedRoot || !this.available) throw new Error('请先下载更新包。');
     if (process.platform !== 'win32' || !app.isPackaged) throw new Error('安装更新只能在已打包的 Windows 版本中执行。');
     const hasDownloads = downloadManager?.active.size || downloadManager?.tasks.some((task) => ['queued', 'downloading', 'retrying'].includes(task.status));
     if (hasDownloads) throw new Error('请等待下载任务结束或先取消任务，再安装更新。');
     const target = path.dirname(process.execPath);
     await fsp.access(target, fs.constants.W_OK);
-    const helper = userDataPath('Updates', `install-${Date.now()}.ps1`);
-    const logFile = userDataPath('Updates', 'update-install.log');
-    const script = [
-      'param([string]$Source, [string]$Target, [string]$Executable, [int]$ProcessId, [string]$LogFile)',
-      "$ErrorActionPreference = 'Stop'",
-      '$Backup = "$Target.update-backup"',
-      'try {',
-      '  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue',
-      '  Start-Sleep -Milliseconds 1200',
-      '  if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }',
-      '  Move-Item -LiteralPath $Target -Destination $Backup',
-      '  New-Item -ItemType Directory -Path $Target -Force | Out-Null',
-      "  Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force",
-      '  Start-Process -FilePath (Join-Path $Target $Executable)',
-      '  Start-Sleep -Milliseconds 800',
-      '  Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue',
-      "  'Update installed successfully.' | Out-File -LiteralPath $LogFile -Encoding utf8",
-      '} catch {',
-      '  $_ | Out-File -LiteralPath $LogFile -Encoding utf8',
-      '  if (Test-Path -LiteralPath $Backup) {',
-      '    Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue',
-      '    Move-Item -LiteralPath $Backup -Destination $Target -Force',
-      '    Start-Process -FilePath (Join-Path $Target $Executable)',
-      '  }',
-      '}',
-      'Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue'
-    ].join('\r\n');
-    await fsp.writeFile(helper, script, 'utf8');
-    const child = spawn('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper,
-      '-Source', this.stagedRoot,
-      '-Target', target,
-      '-Executable', path.basename(process.execPath),
-      '-ProcessId', String(process.pid),
-      '-LogFile', logFile
-    ], { detached: true, windowsHide: true, stdio: 'ignore', cwd: app.getPath('temp') });
-    child.unref();
-    setTimeout(() => app.quit(), 250);
-    return { installing: true };
+    this.installing = true;
+    try {
+      const helper = userDataPath('Updates', `install-${Date.now()}.ps1`);
+      const logFile = userDataPath('Updates', 'update-install.log');
+      const lockDirectory = userDataPath('Updates', 'install-update.lock');
+      const script = updateCore.createWindowsInstallScript();
+      await fsp.writeFile(helper, script, 'utf8');
+      const child = spawn('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper,
+        '-Source', this.stagedRoot,
+        '-Target', target,
+        '-Executable', path.basename(process.execPath),
+        '-ProcessId', String(process.pid),
+        '-LogFile', logFile,
+        '-LockDirectory', lockDirectory
+      ], { detached: true, windowsHide: true, stdio: 'ignore', cwd: app.getPath('temp') });
+      child.unref();
+      setTimeout(() => app.quit(), 150);
+      // If a window or lifecycle hook unexpectedly vetoes the graceful quit,
+      // force the old executable to exit so the detached installer can proceed.
+      setTimeout(() => app.exit(0), 2000);
+      return { installing: true };
+    } catch (error) {
+      this.installing = false;
+      throw error;
+    }
   }
 }
 

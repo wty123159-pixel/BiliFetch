@@ -379,7 +379,7 @@ struct ContentView: View {
                     updater.dismiss()
                 }
                 .buttonStyle(.bordered)
-                .disabled(updater.phase == .downloading)
+                .disabled(updater.phase == .downloading || updater.phase == .installing)
             }
 
             if let release = updater.release {
@@ -397,7 +397,7 @@ struct ContentView: View {
 
             if updater.phase == .downloading {
                 ProgressView(value: updater.progress)
-            } else if updater.phase == .checking {
+            } else if updater.phase == .checking || updater.phase == .installing {
                 ProgressView()
                     .controlSize(.small)
             }

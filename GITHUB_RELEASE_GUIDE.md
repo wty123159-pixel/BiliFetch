@@ -27,10 +27,10 @@ git push -u origin main
 2. 同时运行 macOS 与 Windows 测试。
 3. 同时构建两个平台的 ZIP。
 4. 下载 Latest Release 中上一版的两个完整包，与新版逐文件比较；变化很少的大文件会生成块级二进制补丁。只要增量包确实更小，就为两个平台各生成一个增量 ZIP。
-5. 计算完整包和增量包的 SHA-256，生成向旧客户端兼容的统一 `update.json`。
+5. 继承上一版 `update.json` 的版本历史，追加本次说明，计算完整包和增量包的 SHA-256，并生成向旧客户端兼容的统一清单。
 6. 创建 GitHub Release，并上传完整包、可用的增量包和更新清单。
 
-Actions 会把真实仓库地址直接写进 macOS 与 Windows 安装包。更新地址不会显示在软件界面，也不需要用户填写；软件会在每次启动时检查一次，有新版才提示。
+Actions 会把真实仓库地址直接写进 macOS 与 Windows 安装包。更新地址不会显示在软件界面，也不需要用户填写；软件会在每次启动时检查一次，有新版才提示。更新窗口会从旧到新显示当前版本之后的全部版本说明；`Updates/release-history.json` 提供首批历史，后续发布会自动继承上一版清单并追加，无需重复填写旧内容。
 
 如果 Actions 提示无权创建 Release，请到仓库 `Settings → Actions → General → Workflow permissions`，确认工作流具有读写权限。组织账号的权限也可能由组织管理员统一限制。
 
@@ -75,31 +75,33 @@ macOS 1.5.10 与 Windows 1.1.3 是首批能读取增量信息的客户端。因�
 ```bash
 node scripts/create-delta-package.mjs \
   --platform macos \
-  --from previous/BiliFetch-macOS-1.5.10.zip \
-  --to dist/BiliFetch-macOS-1.5.11.zip \
-  --output dist/BiliFetch-macOS-delta-1.5.10-to-1.5.11.zip
+  --from previous/BiliFetch-macOS-1.5.12.zip \
+  --to dist/BiliFetch-macOS-1.5.13.zip \
+  --output dist/BiliFetch-macOS-delta-1.5.12-to-1.5.13.zip
 
 node scripts/create-delta-package.mjs \
   --platform windows \
-  --from previous/BiliFetch-Windows-x64-1.1.3.zip \
-  --to dist/BiliFetch-Windows-x64-1.1.4.zip \
-  --output dist/BiliFetch-Windows-x64-delta-1.1.3-to-1.1.4.zip
+  --from previous/BiliFetch-Windows-x64-1.1.5.zip \
+  --to dist/BiliFetch-Windows-x64-1.1.6.zip \
+  --output dist/BiliFetch-Windows-x64-delta-1.1.5-to-1.1.6.zip
 ```
 
 如果增量 ZIP 不比完整包小，脚本会自动放弃该增量包。存在增量包时，再把它们一并写入更新清单：
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.1.4.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.4.zip \
-  --windows-delta dist/BiliFetch-Windows-x64-delta-1.1.3-to-1.1.4.zip \
-  --windows-delta-url https://你的下载地址/BiliFetch-Windows-x64-delta-1.1.3-to-1.1.4.zip \
-  --macos dist/BiliFetch-macOS-1.5.11.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.11.zip \
-  --macos-delta dist/BiliFetch-macOS-delta-1.5.10-to-1.5.11.zip \
-  --macos-delta-url https://你的下载地址/BiliFetch-macOS-delta-1.5.10-to-1.5.11.zip \
-  --notes Updates/release-notes-2026-09-05-2.md \
+  --windows dist/BiliFetch-Windows-x64-1.1.6.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.6.zip \
+  --windows-delta dist/BiliFetch-Windows-x64-delta-1.1.5-to-1.1.6.zip \
+  --windows-delta-url https://你的下载地址/BiliFetch-Windows-x64-delta-1.1.5-to-1.1.6.zip \
+  --macos dist/BiliFetch-macOS-1.5.13.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.13.zip \
+  --macos-delta dist/BiliFetch-macOS-delta-1.5.12-to-1.5.13.zip \
+  --macos-delta-url https://你的下载地址/BiliFetch-macOS-delta-1.5.12-to-1.5.13.zip \
+  --notes Updates/release-notes-2026-09-07-3.md \
+  --history Updates/release-history.json \
+  --previous-manifest previous/update.json \
   --output dist/update.json
 ```
 
-把完整 ZIP、实际生成的增量 ZIP 与 `update.json` 上传到同一次发布。没有生成某个平台的增量包时，删掉该平台的两个 `--*-delta` 参数；客户端会自动使用完整包。
+把完整 ZIP、实际生成的增量 ZIP 与 `update.json` 上传到同一次发布。没有上一版清单时可以删掉 `--previous-manifest`；没有生成某个平台的增量包时，删掉该平台的两个 `--*-delta` 参数，客户端会自动使用完整包。
