@@ -131,7 +131,10 @@ final class ProcessRunner {
                 case .standardOutput: context.outputEnded = true
                 case .standardError: context.errorEnded = true
                 }
-            } else if let chunk = String(data: data, encoding: .utf8) {
+            } else {
+                // Never discard a complete pipe chunk because it happens to
+                // end in the middle of a multibyte UTF-8 scalar.
+                let chunk = String(decoding: data, as: UTF8.self)
                 switch stream {
                 case .standardOutput:
                     context.outputBuffer.append(chunk)

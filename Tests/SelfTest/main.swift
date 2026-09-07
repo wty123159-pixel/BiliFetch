@@ -64,7 +64,8 @@ let request = DownloadRequest(
 let arguments = DownloadArgumentBuilder.arguments(
     for: request,
     ffmpegPath: "/tmp/ffmpeg",
-    aria2Path: "/tmp/aria2c"
+    aria2Path: "/tmp/aria2c",
+    aria2RPC: Aria2RPCConfiguration(port: 54_321, secret: "testsecret")
 )
 check(arguments.suffix(2).first == "--", "terminates options before the user URL")
 check(arguments.last == videoURL.absoluteString, "keeps the URL as one Process argument")
@@ -80,8 +81,11 @@ check(
 check(arguments.contains(where: { $0.contains("-x 8") }), "uses eight aria2 connections")
 check(arguments.contains(where: { $0.contains("--auto-file-renaming=false") }), "reuses the original aria2 partial filename")
 check(arguments.contains(where: { $0.contains("--all-proxy=") }), "aria2 media bypasses incompatible proxies")
-check(arguments.contains(where: { $0.contains("--summary-interval=0") }), "suppresses aria2 progress-summary spam")
+check(arguments.contains(where: { $0.contains("--summary-interval=1") }), "keeps aria2 fallback progress updating every second")
 check(arguments.contains(where: { $0.contains("--show-console-readout=true") }), "keeps aria2 percentage and speed available to the UI")
+check(arguments.contains(where: { $0.contains("--enable-rpc=true") }), "enables direct aria2 live progress monitoring")
+check(arguments.contains(where: { $0.contains("--rpc-listen-port=54321") }), "uses a job-specific loopback RPC port")
+check(arguments.contains(where: { $0.contains("--rpc-secret=testsecret") }), "protects the local aria2 progress endpoint")
 check(!arguments.contains(where: { $0.contains("--quiet=true") }), "does not hide aria2 live progress")
 check(!arguments.contains("--proxy"), "metadata extraction keeps the system network route")
 check(arguments.contains("[02] 测试 [%(id)s].%(ext)s"), "uses the precomputed collection filename")
@@ -90,6 +94,8 @@ check(arguments.contains("--cookies"), "prefers cookies captured by the in-app l
 check(arguments.contains("/tmp/bilibili-cookies.txt"), "passes the in-app cookie file")
 check(arguments.contains("mp4"), "uses the MP4 muxer included with the bundled FFmpeg")
 check(!arguments.contains("mp4/mkv"), "does not select the unavailable bundled MKV muxer")
+check(Aria2ProgressMonitor.overallFraction(rawFraction: 0.5, stage: 1) == 0.45, "maps live video-stream progress")
+check(abs(Aria2ProgressMonitor.overallFraction(rawFraction: 0.5, stage: 2) - 0.94) < 0.0001, "maps live audio-stream progress")
 check(
     DownloadCompletionEvaluator.succeeded(exitCode: 1, hasCompletedVideo: true),
     "treats a verified output video as completed even when a trailing tool exits nonzero"
@@ -339,6 +345,14 @@ check(failedRun.0 != nil && failedRun.0 != 0, "observes a failed process")
 let recoveredRun = runProcess("/bin/echo", arguments: ["recovered"])
 check(recoveredRun.0 == 0, "starts a new process after failure")
 check(recoveredRun.1.contains("recovered"), "receives output after failure without a deadlock")
+let splitUTF8Run = runProcess(
+    "/bin/sh",
+    arguments: ["-c", #"printf '__PROGRESS__|12.5%%|1MiB/s|NA|\0344'; sleep 0.1; printf '\0270\0255\n'"#]
+)
+check(
+    splitUTF8Run.1.contains(where: { $0.contains("__PROGRESS__|12.5%") }),
+    "does not discard a progress chunk split inside UTF-8 output"
+)
 
 let concurrentQueue = DispatchQueue(label: "BiliFetch.SelfTest.Concurrent", attributes: .concurrent)
 let concurrentGroup = DispatchGroup()

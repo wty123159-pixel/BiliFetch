@@ -323,7 +323,8 @@ enum DownloadArgumentBuilder {
     static func arguments(
         for request: DownloadRequest,
         ffmpegPath: String?,
-        aria2Path: String?
+        aria2Path: String?,
+        aria2RPC: Aria2RPCConfiguration? = nil
     ) -> [String] {
         var arguments = [
             "--ignore-config",
@@ -337,7 +338,9 @@ enum DownloadArgumentBuilder {
             "--concurrent-fragments", "4",
             "--paths", request.destination.path,
             "--output", request.outputTemplate ?? "%(playlist&{}/|)s%(playlist_index&{} - |)s%(title).180B [%(id)s].%(ext)s",
-            "--progress-template", "download:__PROGRESS__|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(info.title)s",
+            // Keep this line ASCII-only. Pipe reads may split a multibyte title
+            // between chunks; a title is not needed to identify the owning job.
+            "--progress-template", "download:__PROGRESS__|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
             "--print", "before_dl:__ITEM__|%(playlist_index|1)s|%(playlist_count|1)s|%(title)s",
             "--print", "after_move:__FILE__|%(filepath)s",
             "--progress",
@@ -345,12 +348,16 @@ enum DownloadArgumentBuilder {
         ]
 
         if request.engine == .aria2, let aria2Path {
+            var downloaderArguments = "aria2c:--continue=true -x 8 -s 8 -k 1M --auto-file-renaming=false --allow-overwrite=false --all-proxy= --file-allocation=none --summary-interval=1 --show-console-readout=true --console-log-level=warn --enable-color=false"
+            if let aria2RPC {
+                downloaderArguments += " --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=\(aria2RPC.port) --rpc-secret=\(aria2RPC.secret) --rpc-allow-origin-all=false"
+            }
             arguments += [
                 "--downloader", aria2Path,
                 // yt-dlp may use the macOS system proxy to resolve metadata,
                 // while aria2 downloads CDN media directly. The final aria2
                 // option wins over the proxy value emitted by yt-dlp.
-                "--downloader-args", "aria2c:--continue=true -x 8 -s 8 -k 1M --auto-file-renaming=false --allow-overwrite=false --all-proxy= --file-allocation=none --summary-interval=0 --show-console-readout=true --console-log-level=warn --enable-color=false"
+                "--downloader-args", downloaderArguments
             ]
         }
 

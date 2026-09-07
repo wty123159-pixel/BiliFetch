@@ -59,6 +59,52 @@ function splitLines(stream, callback) {
   stream.on('end', () => { if (pending.trim()) callback(pending.trim()); });
 }
 
+function aria2RPCRequest(configuration, method, parameters = []) {
+  const body = Buffer.from(JSON.stringify({
+    jsonrpc: '2.0', id: 'bilifetch', method,
+    params: [`token:${configuration.secret}`, ...parameters]
+  }));
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: '127.0.0.1', port: configuration.port, path: '/jsonrpc', method: 'POST',
+      timeout: 800,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length }
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', (chunk) => {
+        size += chunk.length;
+        if (size <= 256 * 1024) chunks.push(chunk);
+        else request.destroy(new Error('aria2 RPC response is too large'));
+      });
+      response.on('end', () => {
+        try {
+          const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (response.statusCode !== 200 || payload.error || !Object.hasOwn(payload, 'result')) {
+            throw new Error('aria2 RPC returned an error');
+          }
+          resolve(payload.result);
+        } catch (error) { reject(error); }
+      });
+    });
+    request.once('timeout', () => request.destroy(new Error('aria2 RPC timeout')));
+    request.once('error', reject);
+    request.end(body);
+  });
+}
+
+function formatTransferSpeed(bytesPerSecond, stage) {
+  const value = Math.max(0, Number(bytesPerSecond) || 0);
+  const phase = stage === 1 ? '视频流' : (stage === 2 ? '音频流' : '媒体流');
+  if (!value) return `正在连接${phase}…`;
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) { scaled /= 1024; unit += 1; }
+  const digits = scaled >= 100 || unit === 0 ? 0 : 1;
+  return `${scaled.toFixed(digits)} ${units[unit]}/s · ${phase}`;
+}
+
 function runProcess(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { windowsHide: true, ...options });
@@ -391,6 +437,7 @@ class DownloadManager {
     this.paused = false;
     this.pausedForSleep = false;
     this.cancelled = false;
+    this.rpcPorts = new Set();
   }
 
   async start(payload) {
@@ -459,25 +506,37 @@ class DownloadManager {
   runTask(task) {
     task.status = task.retries ? 'retrying' : 'downloading';
     task.error = '';
-    task.speed = '正在连接…';
+    task.speed = this.settings.engine === 'aria2' ? '正在启动实时进度监测…' : '正在连接媒体服务器…';
     this.emitTask(task);
     const settings = {
       ...this.settings,
       cookieFile: fs.existsSync(userDataPath('bilibili-cookies.txt')) ? userDataPath('bilibili-cookies.txt') : null
     };
+    const aria2RPC = settings.engine === 'aria2' && this.tools.aria2
+      ? this.createAria2RPCConfiguration()
+      : null;
     const args = core.buildDownloadArguments({
       item: task, destination: this.collectionDestination, settings, tools: this.tools,
-      outputTemplate: outputTemplateFor(task, this.tasks.length)
+      outputTemplate: outputTemplateFor(task, this.tasks.length), aria2RPC
     });
     const child = spawn(this.tools.ytdlp, args, { windowsHide: true });
-    const context = { child, pausing: false, completedPath: '' };
+    const context = {
+      child, pausing: false, completedPath: '', aria2RPC, rpcTimer: null, rpcPolling: false,
+      rpcStopped: false, rpcSessionIDs: [], rpcShutdownSessionIDs: new Set()
+    };
     this.active.set(task.key, context);
+    if (aria2RPC) this.startAria2ProgressMonitor(context, task);
     const onLine = (line) => {
       send('downloads:log', `[${task.index}] ${line}`);
       const progress = core.parseProgress(line);
-      if (progress) {
-        task.progress = progress.percent;
+      if (progress && !context.aria2RPC) {
+        task.progress = Math.max(task.progress, progress.percent);
         task.speed = progress.speed || '正在传输…';
+        this.emitTask(task);
+      }
+      if (/\[(?:Merger|Fixup)/.test(line)) {
+        task.progress = Math.max(task.progress, 99);
+        task.speed = '正在合并音视频…';
         this.emitTask(task);
       }
       const completed = core.parseCompletedPath(line);
@@ -489,6 +548,7 @@ class DownloadManager {
       send('downloads:log', `[${task.index}] 启动失败：${error.message}`);
     });
     child.once('close', async (code) => {
+      this.stopAria2ProgressMonitor(context, false);
       this.active.delete(task.key);
       if (context.pausing || this.paused || this.cancelled) {
         if (!this.cancelled) { task.status = 'paused'; task.speed = ''; this.emitTask(task); }
@@ -516,6 +576,75 @@ class DownloadManager {
       await this.persist();
       this.pump();
     });
+  }
+
+  createAria2RPCConfiguration() {
+    let port = crypto.randomInt(49152, 65001);
+    for (let attempt = 0; attempt < 128 && this.rpcPorts.has(port); attempt += 1) {
+      port = crypto.randomInt(49152, 65001);
+    }
+    this.rpcPorts.add(port);
+    return { port, secret: crypto.randomBytes(16).toString('hex') };
+  }
+
+  startAria2ProgressMonitor(context, task) {
+    context.rpcStopped = false;
+    const poll = () => this.pollAria2Progress(context, task);
+    context.rpcTimer = setInterval(poll, 350);
+    poll();
+  }
+
+  stopAria2ProgressMonitor(context, forceShutdown) {
+    context.rpcStopped = true;
+    if (context.rpcTimer) clearInterval(context.rpcTimer);
+    context.rpcTimer = null;
+    if (context.aria2RPC) {
+      this.rpcPorts.delete(context.aria2RPC.port);
+      if (forceShutdown) aria2RPCRequest(context.aria2RPC, 'aria2.forceShutdown').catch(() => {});
+    }
+  }
+
+  registerAria2Session(context, sessionID) {
+    if (!context.rpcSessionIDs.includes(sessionID)) context.rpcSessionIDs.push(sessionID);
+    return Math.max(1, context.rpcSessionIDs.indexOf(sessionID) + 1);
+  }
+
+  async pollAria2Progress(context, task) {
+    if (!context.aria2RPC || context.rpcStopped || context.rpcPolling || context.pausing || this.cancelled) return;
+    context.rpcPolling = true;
+    const fields = ['gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed'];
+    try {
+      const session = await aria2RPCRequest(context.aria2RPC, 'aria2.getSessionInfo');
+      if (!session?.sessionId) return;
+      const stage = this.registerAria2Session(context, session.sessionId);
+      const [activeResult, waitingResult, stoppedResult] = await Promise.all([
+        aria2RPCRequest(context.aria2RPC, 'aria2.tellActive', [fields]),
+        aria2RPCRequest(context.aria2RPC, 'aria2.tellWaiting', [0, 1000, fields]),
+        aria2RPCRequest(context.aria2RPC, 'aria2.tellStopped', [0, 1000, fields])
+      ]);
+      if (context.rpcStopped || context.pausing || this.cancelled) return;
+      const active = Array.isArray(activeResult) ? activeResult : [];
+      const waiting = Array.isArray(waitingResult) ? waitingResult : [];
+      const stopped = Array.isArray(stoppedResult) ? stoppedResult : [];
+      if (active.length || waiting.length) {
+        const rawPercent = core.aggregateAria2Progress(active, waiting, stopped);
+        const speed = active.reduce((sum, entry) => sum + (Number(entry.downloadSpeed) || 0), 0);
+        task.progress = Math.max(task.progress, core.mapAria2Progress(rawPercent, stage));
+        task.speed = formatTransferSpeed(speed, stage);
+        this.emitTask(task);
+      } else if (stopped.length && !context.rpcShutdownSessionIDs.has(session.sessionId)) {
+        const completed = stopped.every((entry) => entry.status === 'complete');
+        const rawPercent = core.aggregateAria2Progress([], [], stopped);
+        task.progress = Math.max(task.progress, core.mapAria2Progress(rawPercent, stage));
+        task.speed = completed
+          ? (stage === 1 ? '视频流完成，正在准备音频…' : '媒体下载完成，正在合并…')
+          : '下载阶段结束，正在检查…';
+        this.emitTask(task);
+        await aria2RPCRequest(context.aria2RPC, 'aria2.shutdown');
+        context.rpcShutdownSessionIDs.add(session.sessionId);
+      }
+    } catch { /* RPC is normally offline before and between media streams. */ }
+    finally { context.rpcPolling = false; }
   }
 
   async verify(candidate) {
@@ -567,6 +696,7 @@ class DownloadManager {
       context.pausing = true;
       const task = this.tasks.find((entry) => entry.key === key);
       if (task) { task.status = 'paused'; task.speed = ''; }
+      this.stopAria2ProgressMonitor(context, true);
       stopChild(context.child);
     }
     this.emitAll();
@@ -591,7 +721,11 @@ class DownloadManager {
   async cancel() {
     this.cancelled = true;
     this.paused = false;
-    for (const context of this.active.values()) { context.pausing = true; stopChild(context.child); }
+    for (const context of this.active.values()) {
+      context.pausing = true;
+      this.stopAria2ProgressMonitor(context, true);
+      stopChild(context.child);
+    }
     this.active.clear();
     this.tasks.forEach((task) => { if (task.status !== 'completed') task.status = 'cancelled'; });
     await fsp.rm(userDataPath('unfinished-download.json'), { force: true });

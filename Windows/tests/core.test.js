@@ -112,14 +112,22 @@ test('rejects intermediate video-only files as final output', () => {
 
 test('parses yt-dlp and aria2 progress lines', () => {
   assert.deepEqual(core.parseProgress('BILIFETCH_PROGRESS: 42.5%|3.2MiB/s|00:10'), { percent: 42.5, speed: '3.2MiB/s', eta: '00:10' });
-  assert.deepEqual(core.parseProgress('[#abc 20MiB/100MiB(20%) CN:8 DL:5.0MiB]'), { percent: 20, speed: '5.0MiB', eta: '' });
+  assert.deepEqual(core.parseProgress('[#abc 20MiB/100MiB(20.5%) CN:8 DL:5.0MiB]'), { percent: 20.5, speed: '5.0MiB/s', eta: '' });
+  assert.equal(core.mapAria2Progress(50, 1), 45);
+  assert.equal(core.mapAria2Progress(50, 2), 94);
+  assert.equal(core.aggregateAria2Progress(
+    [{ status: 'active', totalLength: '100', completedLength: '50' }],
+    [{ status: 'waiting', totalLength: '100', completedLength: '0' }],
+    [{ status: 'complete', totalLength: '100', completedLength: '100' }]
+  ), 50);
 });
 
 test('download arguments enable resume, fixed merge, cookies and aria2', () => {
   const args = core.buildDownloadArguments({
     item: { url: 'https://www.bilibili.com/video/BV1x?p=1' }, destination: 'D:\\Video',
     settings: { quality: 'best', engine: 'aria2', browser: 'edge', subtitles: false },
-    tools: { ffmpeg: 'ffmpeg.exe', aria2: 'aria2c.exe' }, outputTemplate: '%(title)s.%(ext)s'
+    tools: { ffmpeg: 'ffmpeg.exe', aria2: 'aria2c.exe' }, outputTemplate: '%(title)s.%(ext)s',
+    aria2RPC: { port: 54321, secret: 'testsecret' }
   });
   assert.ok(args.includes('--continue'));
   assert.ok(args.includes('--no-simulate'));
@@ -127,6 +135,8 @@ test('download arguments enable resume, fixed merge, cookies and aria2', () => {
   assert.ok(args.includes('mp4'));
   assert.ok(args.includes('--cookies-from-browser'));
   assert.ok(args.includes('aria2c.exe'));
+  assert.ok(args.some((value) => value.includes('--enable-rpc=true')));
+  assert.ok(args.some((value) => value.includes('--rpc-listen-port=54321')));
   assert.equal(args.at(-1), 'https://www.bilibili.com/video/BV1x?p=1');
 });
 

@@ -235,9 +235,31 @@ function parseProgress(line) {
       eta: custom[3].trim() === 'NA' ? '' : custom[3].trim()
     };
   }
-  const aria = String(line || '').match(/\((\d+)%\).*?DL:([^\s\]]+)/i);
-  if (aria) return { percent: Number(aria[1]), speed: aria[2], eta: '' };
+  const aria = String(line || '').match(/\(([\d.]+)%\).*?DL:([^\s\]]+)/i);
+  if (aria) {
+    const speed = aria[2].endsWith('/s') ? aria[2] : `${aria[2]}/s`;
+    return { percent: Number(aria[1]), speed, eta: '' };
+  }
   return null;
+}
+
+function mapAria2Progress(rawPercent, stage) {
+  const raw = Math.max(0, Math.min(100, Number(rawPercent) || 0));
+  if (stage <= 1) return raw * 0.9;
+  if (stage === 2) return 90 + raw * 0.08;
+  return Math.min(99.5, 98 + raw * 0.015);
+}
+
+function aggregateAria2Progress(active = [], waiting = [], stopped = []) {
+  const transfers = [...active, ...waiting, ...stopped];
+  if (!transfers.length) return 0;
+  const completedUnits = transfers.reduce((sum, transfer) => {
+    if (transfer.status === 'complete') return sum + 1;
+    const total = Number(transfer.totalLength) || 0;
+    const completed = Number(transfer.completedLength) || 0;
+    return sum + (total > 0 ? Math.max(0, Math.min(1, completed / total)) : 0);
+  }, 0);
+  return (completedUnits / transfers.length) * 100;
 }
 
 function parseCompletedPath(line) {
@@ -256,7 +278,7 @@ function hasCompleteToolset(tools) {
   return Boolean(tools?.ytdlp && tools?.ffmpeg && tools?.ffprobe && tools?.aria2);
 }
 
-function buildDownloadArguments({ item, destination, settings, tools, outputTemplate }) {
+function buildDownloadArguments({ item, destination, settings, tools, outputTemplate, aria2RPC = null }) {
   const args = [
     '--ignore-config', '--no-colors', '--newline', '--continue', '--part',
     '--no-overwrites', '--retries', '8', '--fragment-retries', '8',
@@ -277,10 +299,14 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
   if (settings.cookieFile) args.push('--cookies', settings.cookieFile);
   else if (settings.browser && settings.browser !== 'none') args.push('--cookies-from-browser', settings.browser);
   if (settings.engine === 'aria2' && tools.aria2) {
+    let downloaderArguments = 'aria2c:--continue=true -x 8 -s 8 -k 1M --auto-file-renaming=false --allow-overwrite=false --file-allocation=none --summary-interval=1 --show-console-readout=true --console-log-level=warn --enable-color=false';
+    if (aria2RPC) {
+      downloaderArguments += ` --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=${aria2RPC.port} --rpc-secret=${aria2RPC.secret} --rpc-allow-origin-all=false`;
+    }
     args.push(
       '--downloader', tools.aria2,
       '--downloader-args',
-      'aria2c:--continue=true -x 8 -s 8 -k 1M --auto-file-renaming=false --allow-overwrite=false --file-allocation=none --summary-interval=1 --show-console-readout=true --console-log-level=warn --enable-color=false'
+      downloaderArguments
     );
   }
   args.push('--', item.url);
@@ -288,10 +314,12 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
 }
 
 module.exports = {
+  aggregateAria2Progress,
   buildDownloadArguments,
   hasOuterCollectionContext,
   hasCompleteToolset,
   isPlausibleFinalVideo,
+  mapAria2Progress,
   normalizeThumbnailURL,
   parseBilibiliViewMetadata,
   parseCompletedPath,

@@ -94,6 +94,8 @@ final class DownloadViewModel: ObservableObject {
     private var pendingItemIDs: [String] = []
     private var batchItemIDs: Set<String> = []
     private var activeJobs: [String: DownloadJob] = [:]
+    private var aria2ProgressMonitors: [String: Aria2ProgressMonitor] = [:]
+    private var aria2RPCConfigurations: [String: Aria2RPCConfiguration] = [:]
     private var pauseRequestedJobIDs: Set<String> = []
     private var completedOutputFiles: Set<URL> = []
     private var permanentFailureCount = 0
@@ -520,6 +522,7 @@ final class DownloadViewModel: ObservableObject {
         persistResumeSnapshot()
         for (jobID, job) in activeJobs {
             pauseRequestedJobIDs.insert(jobID)
+            aria2ProgressMonitors[jobID]?.stop(forceShutdown: true)
             job.service.cancel()
         }
     }
@@ -649,7 +652,10 @@ final class DownloadViewModel: ObservableObject {
             collectionItems[index].status = .pending
             collectionItems[index].speedText = ""
         }
-        for job in activeJobs.values { job.service.cancel() }
+        for (jobID, job) in activeJobs {
+            aria2ProgressMonitors[jobID]?.stop(forceShutdown: true)
+            job.service.cancel()
+        }
         if activeJobs.isEmpty {
             state = .cancelled
             statusText = "已取消"
@@ -725,7 +731,9 @@ final class DownloadViewModel: ObservableObject {
     private func launchCollectionItem(at index: Int) {
         collectionItems[index].attempt += 1
         collectionItems[index].status = .downloading
-        collectionItems[index].speedText = ""
+        collectionItems[index].speedText = engine == .aria2
+            ? "正在启动实时进度监测…"
+            : "正在连接媒体服务器…"
         let item = collectionItems[index]
         let usesCollectionFolder = collectionItems.count > 1
         let request = DownloadRequest(
@@ -760,6 +768,12 @@ final class DownloadViewModel: ObservableObject {
         case .single: jobID = "single-\(UUID().uuidString)"
         case .collection(let itemID): jobID = itemID
         }
+        let aria2RPC: Aria2RPCConfiguration? = {
+            guard request.engine == .aria2, backend.aria2c != nil else { return nil }
+            return Aria2RPCConfiguration.make(
+                avoiding: Set(aria2RPCConfigurations.values.map(\.port))
+            )
+        }()
         let service = DownloaderService()
         let delegate = DownloadJobDelegate(
             onLine: { [weak self] line in
@@ -784,7 +798,8 @@ final class DownloadViewModel: ObservableObject {
         let arguments = DownloadArgumentBuilder.arguments(
             for: request,
             ffmpegPath: ffmpeg.path,
-            aria2Path: backend.aria2c?.path
+            aria2Path: backend.aria2c?.path,
+            aria2RPC: aria2RPC
         )
         do {
             try service.start(
@@ -792,7 +807,24 @@ final class DownloadViewModel: ObservableObject {
                 arguments: arguments,
                 toolDirectory: ffmpeg.deletingLastPathComponent()
             )
+            if let aria2RPC {
+                let monitor = Aria2ProgressMonitor(configuration: aria2RPC)
+                aria2RPCConfigurations[jobID] = aria2RPC
+                aria2ProgressMonitors[jobID] = monitor
+                monitor.start { [weak self] liveProgress in
+                    Task { @MainActor in
+                        guard let self, let job = self.activeJobs[jobID] else { return }
+                        self.updateProgress(
+                            for: job.kind,
+                            fraction: liveProgress.fraction,
+                            speed: liveProgress.speedText
+                        )
+                    }
+                }
+            }
         } catch {
+            aria2ProgressMonitors.removeValue(forKey: jobID)?.stop(forceShutdown: true)
+            aria2RPCConfigurations.removeValue(forKey: jobID)
             if var job = activeJobs[jobID] {
                 job.logLines.append(error.localizedDescription)
                 activeJobs[jobID] = job
@@ -820,8 +852,12 @@ final class DownloadViewModel: ObservableObject {
             }
         }
 
-        if cleaned.hasPrefix("__PROGRESS__|") {
-            let fields = cleaned.split(separator: "|", maxSplits: 4, omittingEmptySubsequences: false).map(String.init)
+        if let markerRange = cleaned.range(of: "__PROGRESS__|") {
+            // yt-dlp invokes this hook only after an external aria2 transfer
+            // finishes. The RPC monitor above supplies the continuous values.
+            if aria2RPCConfigurations[jobID] != nil { return }
+            let payload = String(cleaned[markerRange.lowerBound...])
+            let fields = payload.split(separator: "|", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
             let numeric = fields.count > 1
                 ? fields[1].replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)
                 : ""
@@ -832,8 +868,9 @@ final class DownloadViewModel: ObservableObject {
             return
         }
 
-        if cleaned.contains("[#"), cleaned.contains("DL:"),
-           let percent = firstMatch(in: cleaned, pattern: #"\(([0-9]{1,3})%\)"#),
+        if aria2RPCConfigurations[jobID] == nil,
+           cleaned.contains("[#"), cleaned.contains("DL:"),
+           let percent = firstMatch(in: cleaned, pattern: #"\(([0-9]{1,3}(?:\.[0-9]+)?)%\)"#),
            let value = Double(percent) {
             var speed = firstMatch(in: cleaned, pattern: #"DL:([^\s\]]+)"#) ?? ""
             if !speed.isEmpty, !speed.hasSuffix("/s") { speed += "/s" }
@@ -841,8 +878,8 @@ final class DownloadViewModel: ObservableObject {
             return
         }
 
-        if cleaned.hasPrefix("__FILE__|") {
-            let path = String(cleaned.dropFirst("__FILE__|".count))
+        if let markerRange = cleaned.range(of: "__FILE__|") {
+            let path = String(cleaned[markerRange.upperBound...])
             let file = URL(fileURLWithPath: path)
             job.latestFile = file
             activeJobs[jobID] = job
@@ -850,7 +887,11 @@ final class DownloadViewModel: ObservableObject {
             return
         }
 
-        if cleaned.hasPrefix("__ITEM__|") { return }
+        if cleaned.contains("__ITEM__|") { return }
+
+        if cleaned.contains("[Merger]") || cleaned.contains("[Fixup") {
+            updateProgress(for: job.kind, fraction: 0.99, speed: "正在合并音视频…")
+        }
 
         job.logLines.append(cleaned)
         if job.logLines.count > 300 { job.logLines.removeFirst(job.logLines.count - 300) }
@@ -869,10 +910,10 @@ final class DownloadViewModel: ObservableObject {
         let value = min(max(fraction, 0), 1)
         switch kind {
         case .single:
-            progress = value
+            progress = max(progress, value)
         case .collection(let itemID):
             guard let index = collectionItems.firstIndex(where: { $0.id == itemID }) else { return }
-            collectionItems[index].progress = value
+            collectionItems[index].progress = max(collectionItems[index].progress, value)
             collectionItems[index].speedText = speed
             let values = collectionItems.filter { batchItemIDs.contains($0.id) }.map(\.progress)
             progress = values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
@@ -881,6 +922,8 @@ final class DownloadViewModel: ObservableObject {
 
     private func handleDownloadFinished(jobID: String, exitCode: Int32) {
         guard let job = activeJobs.removeValue(forKey: jobID) else { return }
+        aria2ProgressMonitors.removeValue(forKey: jobID)?.stop(forceShutdown: false)
+        aria2RPCConfigurations.removeValue(forKey: jobID)
         let completedFile = findCompletedVideo(for: job)
         if let completedFile { latestFile = completedFile }
         let succeeded = DownloadCompletionEvaluator.succeeded(
