@@ -1,7 +1,7 @@
 {
   "name": "bilifetch-windows",
-  "version": "1.1.8",
-  "description": "BiliFetch for Windows 10/11",
+  "version": "1.1.10",
+  "description": "记住你宇哥 · Windows 10/11 视频下载工具",
   "main": "main.js",
   "author": "BiliFetch",
   "license": "MIT",
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.js",
-    "package:win": "electron-packager . BiliFetch --platform=win32 --arch=x64 --out=../build/windows --overwrite --asar --icon=assets/icon.ico --ignore=^/tests$ --ignore=^/README.md$"
+    "package:win": "electron-packager . BiliFetch --platform=win32 --arch=x64 --out=../build/windows --overwrite --asar --icon=assets/icon.ico --win32metadata.ProductName=记住你宇哥 --win32metadata.FileDescription=记住你宇哥 --ignore=^/tests$ --ignore=^/README.md$"
   },
   "dependencies": {
     "extract-zip": "2.0.1",

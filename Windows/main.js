@@ -15,9 +15,20 @@ const QRCode = require('qrcode');
 const core = require('./core');
 const updateCore = require('./update-core');
 const updateFiles = require('./update-files');
+const { WeChatCapture } = require('./wechat-capture');
+const { showStartupNotice } = require('./startup-notice');
 const updateIO = updateFiles.fs.promises;
 
 const APP_VERSION = require('./package.json').version;
+const APP_DISPLAY_NAME = '记住你宇哥';
+// Keep the pre-rename data and Chromium session directories. Changing the
+// display name must not move settings, cookies, capture keys or unfinished jobs.
+const legacyDataPaths = ['userData', 'sessionData'].map(name => [name, app.getPath(name)]);
+app.setName(APP_DISPLAY_NAME);
+for (const [name, directory] of legacyDataPaths) {
+  fs.mkdirSync(directory, { recursive: true });
+  app.setPath(name, directory);
+}
 const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json';
 const TOOL_URLS = {
   ytdlp: 'https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe',
@@ -30,6 +41,7 @@ let downloadManager;
 let saveBlocker = null;
 let qrSession = null;
 let appUpdater;
+let weChatCapture;
 const thumbnailCache = new Map();
 
 function userDataPath(...parts) {
@@ -334,6 +346,11 @@ async function resolveWithBilibiliAPI(validated) {
 async function resolveCollection(sourceURL, settings = {}, requestID = '') {
   const validated = core.validateVideoURL(sourceURL);
   if (!validated) throw new Error('请一次粘贴一条 B 站或抖音视频链接，可包含整段分享文字。');
+  if (core.isWeChatURL(validated)) {
+    const id = core.weChatCaptureID(validated);
+    if (id) return weChatCapture.preview([id]);
+    throw new Error('请打开「视频号捕获」，开启后在电脑微信中重新打开并播放这条作品。');
+  }
   let singleVideoFallback = null;
   const isBVIDVideo = core.isBilibiliURL(validated) && /\/video\/BV[0-9A-Za-z]+/i.test(new URL(validated).pathname);
   const videoHasCollectionContext = isBVIDVideo && core.hasOuterCollectionContext(validated);
@@ -507,7 +524,7 @@ class DownloadManager {
     }
   }
 
-  runTask(task) {
+  async runTask(task) {
     task.status = task.retries ? 'retrying' : 'downloading';
     task.error = '';
     task.speed = this.settings.engine === 'aria2' ? '正在启动实时进度监测…' : '正在连接媒体服务器…';
@@ -519,16 +536,36 @@ class DownloadManager {
     const aria2RPC = settings.engine === 'aria2' && this.tools.aria2
       ? this.createAria2RPCConfiguration()
       : null;
-    const args = core.buildDownloadArguments({
-      item: task, destination: this.collectionDestination, settings, tools: this.tools,
-      outputTemplate: outputTemplateFor(task, this.tasks.length), aria2RPC
-    });
-    const child = spawn(this.tools.ytdlp, args, { windowsHide: true });
     const context = {
-      child, pausing: false, completedPath: '', aria2RPC, rpcTimer: null, rpcPolling: false,
+      child: null, pausing: false, completedPath: '', aria2RPC, rpcTimer: null, rpcPolling: false,
       rpcStopped: false, rpcSessionIDs: [], rpcShutdownSessionIDs: new Set()
     };
     this.active.set(task.key, context);
+    let weChatManifest;
+    try {
+      const id = core.weChatCaptureID(task.url);
+      if (id) weChatManifest = await weChatCapture.manifest(id);
+    } catch (error) {
+      this.stopAria2ProgressMonitor(context, false);
+      this.active.delete(task.key);
+      if (this.cancelled) return;
+      task.status = this.paused ? 'paused' : 'failed';
+      task.error = error.message;
+      task.speed = '';
+      this.emitTask(task); await this.persist(); this.pump();
+      return;
+    }
+    if (context.pausing || this.paused || this.cancelled || this.active.get(task.key) !== context) {
+      this.stopAria2ProgressMonitor(context, false);
+      if (this.active.get(task.key) === context) this.active.delete(task.key);
+      return;
+    }
+    const args = core.buildDownloadArguments({
+      item: task, destination: this.collectionDestination, settings, tools: this.tools,
+      outputTemplate: outputTemplateFor(task, this.tasks.length), aria2RPC, weChatManifest
+    });
+    const child = spawn(this.tools.ytdlp, args, { windowsHide: true });
+    context.child = child;
     if (aria2RPC) this.startAria2ProgressMonitor(context, task);
     const onLine = (line) => {
       send('downloads:log', `[${task.index}] ${line}`);
@@ -922,7 +959,7 @@ async function pollQRLogin() {
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 820, minWidth: 930, minHeight: 650, backgroundColor: '#100d1b',
-    title: 'BiliFetch', icon: path.join(__dirname, 'assets', 'icon.png'),
+    title: APP_DISPLAY_NAME, icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   await mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -937,6 +974,26 @@ async function loadSettings() {
 }
 
 function registerIPC() {
+  ipcMain.handle('capture:state', () => weChatCapture.state());
+  ipcMain.handle('capture:start', async () => {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type:'question', title:'开启本机视频号捕获？', message:'需要信任本机捕获证书，并临时设置网络代理。',
+      detail:'只处理视频号页面。关闭捕获或正常退出时恢复原设置；每台电脑独立生成证书和私钥，不随软件分发。停止捕获后保留本机证书，方便下次使用。首次启用可能出现系统授权提示。',
+      buttons:['取消', '开启捕获'], defaultId:0, cancelId:0
+    });
+    return result.response === 1 ? weChatCapture.start() : weChatCapture.state();
+  });
+  ipcMain.handle('capture:stop', () => weChatCapture.stop());
+  ipcMain.handle('capture:preview', (_, ids) => weChatCapture.preview(ids));
+  ipcMain.handle('capture:clear', () => {
+    if (downloadManager.active.size || downloadManager.tasks.some(task => ['queued','paused','retrying'].includes(task.status))) throw new Error('请先完成或取消当前下载任务。');
+    return weChatCapture.clear();
+  });
+  ipcMain.handle('capture:diagnostics', async () => {
+    const report = { ...await weChatCapture.diagnostics(), appVersion:APP_VERSION, system:os.platform() + ' ' + os.release() };
+    const result = await dialog.showSaveDialog(mainWindow, { title:'导出视频号诊断', defaultPath:'记住你宇哥-视频号诊断.json', filters:[{ name:'JSON', extensions:['json'] }] });
+    if (!result.canceled && result.filePath) { await writeJSON(result.filePath, report); shell.showItemInFolder(result.filePath); }
+  });
   ipcMain.handle('app:initial', async () => {
     const settings = await loadSettings();
     return {
@@ -967,18 +1024,45 @@ function registerIPC() {
   ipcMain.handle('login:logout', async () => { qrSession = null; await fsp.rm(userDataPath('bilibili-cookies.txt'), { force: true }); return true; });
   ipcMain.handle('update:check', () => appUpdater.check());
   ipcMain.handle('update:download', (_, release) => appUpdater.download(release));
-  ipcMain.handle('update:install', () => appUpdater.install());
+  ipcMain.handle('update:install', async () => { await weChatCapture.stop(); return appUpdater.install(); });
 }
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.bilifetch.windows');
+  weChatCapture = new WeChatCapture(
+    app.isPackaged ? path.join(process.resourcesPath, 'tools', 'bilifetch-capture.exe') :
+      path.join(__dirname, '..', 'build', 'wechat-capture', process.platform === 'win32' ? 'bilifetch-capture.exe' : 'bilifetch-capture-macos'),
+    userDataPath('WeChatCapture')
+  );
+  if (fs.existsSync(userDataPath('WeChatCapture', 'proxy-restore.json'))) {
+    try { await weChatCapture.ensureReady(); }
+    catch (error) { dialog.showErrorBox('视频号网络恢复', error.message); }
+  }
+  if (!await showStartupNotice(dialog)) {
+    app.quit();
+    return;
+  }
   downloadManager = new DownloadManager();
   appUpdater = new AppUpdater();
   registerIPC();
   powerMonitor.on('suspend', () => downloadManager.pause(true));
   powerMonitor.on('resume', () => setTimeout(() => downloadManager.resume(true), 6000));
   await createWindow();
+}).catch(error => {
+  dialog.showErrorBox('软件启动失败', error.message);
+  app.quit();
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => { if (downloadManager?.active.size) downloadManager.pause(false); });
+let captureQuitReady = false, captureQuitting = false;
+app.on('before-quit', (event) => {
+  if (downloadManager?.active.size) downloadManager.pause(false);
+  if (captureQuitReady || !weChatCapture?.child) return;
+  event.preventDefault();
+  if (captureQuitting) return;
+  captureQuitting = true;
+  weChatCapture.shutdown().then(() => { captureQuitReady = true; app.quit(); }).catch(error => {
+    captureQuitting = false;
+    dialog.showErrorBox('网络设置尚未恢复', error.message + '\n请在视频号面板关闭捕获后再退出。');
+  });
+});

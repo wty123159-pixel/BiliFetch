@@ -47,9 +47,13 @@ git commit -m "Release: describe the changes"
 git push
 ```
 
-5. 打开 GitHub 仓库的 `Actions` 页面，选择 `Build and release macOS + Windows`，点击 `Run workflow`。
+5. 打开 GitHub 仓库的 `Actions` 页面，选择 `Build and release macOS + Windows`，点击 `Run workflow`，并在分支选择器中选择刚推送改动的分支。新建的 Release Tag 会指向这次实际构建的提交。
 6. Tag 建议填写日期，例如 `v2026.09.05`；Notes 填写用户能看懂的更新内容。
 7. 工作流全部变绿后，GitHub 的 Releases 页面会出现新版。已经配置更新通道的客户端会在下次启动时检查到它。
+
+如果工作流失败后修改了代码，应先提交并推送修复，再发起一次新的 `Run workflow`。旧记录的 `Re-run jobs` 仍使用旧提交，不会带上修复。确认失败时尚未创建 Release 或 Tag 后，可以沿用原计划的 Tag；构建流程修复本身无需增加软件版本。
+
+Windows 的固定 FFmpeg 上游每日压缩包已过保留期。构建会校验并复用本地原始缓存，或从本仓库 `v2026.09.07-3` 的 `BiliFetch-Windows-x64-1.1.6.zip` 恢复相同组件；恢复包使用固定 SHA-256，且只提取 FFmpeg、FFprobe 和对应运行库。请保留这个历史发布包。缓存未命中时也应能构建，不能把缓存作为唯一依赖来源。
 
 客户端不会接收代码仓库里的源文件，而是读取 Latest Release 中固定名称的 `update.json`。它比较当前平台版本后，优先选择 `fromVersion` 与本机版本完全一致的增量 ZIP；没有对应增量包，或增量下载、SHA-256、文件校验、应用过程失败时，会自动改下完整 ZIP。准备完成后才退出并替换程序，失败会恢复旧应用。两个平台的账号登录、设置与未完成任务都保存在用户数据目录，不会随程序包替换而删除。
 

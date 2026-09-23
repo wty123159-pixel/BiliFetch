@@ -32,6 +32,7 @@ ARCHIVE_NAME="BiliFetch-Windows-x64-$APP_VERSION.zip"
 BUNDLED_TOOLS_DIR="$BUILD_DIR/bundled-tools"
 
 mkdir -p "$DIST_DIR" "$BUILD_DIR"
+zsh "$PROJECT_DIR/scripts/build-wechat-capture.sh" windows
 cd "$WINDOWS_DIR"
 "$PNPM_BIN" install --frozen-lockfile --config.node-linker=hoisted
 "$PNPM_BIN" test
@@ -50,9 +51,10 @@ done
 PACKAGED_TOOLS_DIR="$BUILD_DIR/BiliFetch-win32-x64/resources/tools"
 mkdir -p "$PACKAGED_TOOLS_DIR"
 cp "$BUNDLED_TOOLS_DIR"/* "$PACKAGED_TOOLS_DIR/"
+cp "$PROJECT_DIR/build/wechat-capture/bilifetch-capture.exe" "$PACKAGED_TOOLS_DIR/"
 cp -R "$PROJECT_DIR/Shared/yt-dlp-plugins" "$BUILD_DIR/BiliFetch-win32-x64/resources/yt-dlp-plugins"
 
-for tool_name in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe; do
+for tool_name in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe bilifetch-capture.exe; do
   if [[ ! -s "$PACKAGED_TOOLS_DIR/$tool_name" ]]; then
     echo "Windows 发布包缺少内置组件：$tool_name"
     exit 1
@@ -86,6 +88,7 @@ done
 cp "$WINDOWS_DIR/README.md" "$BUILD_DIR/BiliFetch-win32-x64/README-Windows.md"
 cp "$WINDOWS_DIR/THIRD_PARTY_NOTICES.txt" "$BUILD_DIR/BiliFetch-win32-x64/THIRD_PARTY_NOTICES.txt"
 mkdir -p "$BUILD_DIR/BiliFetch-win32-x64/ThirdPartyLicenses"
+cp "$PROJECT_DIR/build/wechat-capture/Go-LICENSE" "$BUILD_DIR/BiliFetch-win32-x64/ThirdPartyLicenses/Go-LICENSE"
 cp "$PROJECT_DIR/Vendor/Tools/FFmpeg-COPYING.LGPLv2.1" "$BUILD_DIR/BiliFetch-win32-x64/ThirdPartyLicenses/FFmpeg-COPYING.LGPLv2.1"
 cp "$PROJECT_DIR/Vendor/Tools/aria2-COPYING" "$BUILD_DIR/BiliFetch-win32-x64/ThirdPartyLicenses/aria2-COPYING"
 

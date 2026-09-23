@@ -10,6 +10,12 @@ const on = (channel, callback) => {
 
 contextBridge.exposeInMainWorld('biliFetch', {
   initial: () => ipcRenderer.invoke('app:initial'),
+  captureState: () => ipcRenderer.invoke('capture:state'),
+  captureStart: () => ipcRenderer.invoke('capture:start'),
+  captureStop: () => ipcRenderer.invoke('capture:stop'),
+  captureClear: () => ipcRenderer.invoke('capture:clear'),
+  capturePreview: (ids) => ipcRenderer.invoke('capture:preview', ids),
+  captureDiagnostics: () => ipcRenderer.invoke('capture:diagnostics'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   chooseDestination: () => ipcRenderer.invoke('dialog:destination'),
   prepareTools: () => ipcRenderer.invoke('tools:prepare'),

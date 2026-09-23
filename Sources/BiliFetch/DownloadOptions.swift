@@ -146,11 +146,16 @@ enum URLClassifier {
         components.port = nil
         if components.path.isEmpty { components.path = "/" }
         components.fragment = nil
-        return components.url
+        guard let url = components.url else { return nil }
+        if host == "weixin.qq.com" || host == "channels.weixin.qq.com" {
+            return isWeChat(url) ? url : nil
+        }
+        return url
     }
 
     static func isAllowed(host: String) -> Bool {
-        ["bilibili.com", "b23.tv", "bilibili.tv", "douyin.com", "iesdouyin.com"].contains {
+        if host == "weixin.qq.com" || host == "channels.weixin.qq.com" { return true }
+        return ["bilibili.com", "b23.tv", "bilibili.tv", "douyin.com", "iesdouyin.com"].contains {
             host == $0 || host.hasSuffix("." + $0)
         }
     }
@@ -163,6 +168,18 @@ enum URLClassifier {
     static func isDouyin(_ url: URL) -> Bool {
         let host = url.host?.lowercased() ?? ""
         return ["douyin.com", "iesdouyin.com"].contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
+    static func weChatCaptureID(_ url: URL) -> String? {
+        guard url.scheme == "https", url.host == "channels.weixin.qq.com",
+              url.query == nil, url.fragment == nil,
+              url.path.range(of: #"^/bilifetch-capture/[a-f0-9]{32}$"#, options: .regularExpression) != nil else { return nil }
+        return url.lastPathComponent
+    }
+
+    static func isWeChat(_ url: URL) -> Bool {
+        weChatCaptureID(url) != nil ||
+        (url.host == "weixin.qq.com" && url.path.range(of: #"^/sph/[A-Za-z0-9_-]+/?$"#, options: .regularExpression) != nil)
     }
 
     static func looksLikeCollection(_ url: URL) -> Bool {
@@ -247,6 +264,9 @@ enum URLClassifier {
 enum ThumbnailRequestPolicy {
     static func referer(for url: URL) -> String? {
         guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return nil }
+        if host == "qpic.cn" || host.hasSuffix(".qpic.cn") || host == "finder.video.qq.com" {
+            return "https://channels.weixin.qq.com/"
+        }
         if ["hdslb.com", "bilibili.com", "biliimg.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
             return "https://www.bilibili.com/"
         }
@@ -277,6 +297,7 @@ struct DownloadRequest {
     let engine: DownloadEngine
     let outputTemplate: String?
     let cookieFileURL: URL?
+    var weChatManifestURL: URL? = nil
 }
 
 enum DownloadCompletionEvaluator {
@@ -456,7 +477,11 @@ enum DownloadArgumentBuilder {
             arguments += ["--write-subs", "--write-auto-subs", "--sub-langs", "zh.*,danmaku"]
         }
 
-        arguments += ["--", request.url.absoluteString]
+        if URLClassifier.weChatCaptureID(request.url) != nil, let manifest = request.weChatManifestURL {
+            arguments += ["--proxy", "", "--load-info-json", manifest.path]
+        } else {
+            arguments += ["--", request.url.absoluteString]
+        }
         return arguments
     }
 }

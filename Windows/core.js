@@ -24,6 +24,7 @@ function thumbnailReferer(value) {
     const url = new URL(value);
     if (url.protocol !== 'https:') return null;
     const matches = (hosts) => hosts.some((host) => url.hostname === host || url.hostname.endsWith('.' + host));
+    if (matches(['qpic.cn']) || url.hostname === 'finder.video.qq.com') return 'https://channels.weixin.qq.com/';
     if (matches(['hdslb.com', 'bilibili.com', 'biliimg.com'])) return 'https://www.bilibili.com/';
     if (matches(['douyinpic.com', 'douyincdn.com', 'byteimg.com', 'pstatp.com', 'ibytedtos.com'])) return 'https://www.douyin.com/';
     return null;
@@ -45,6 +46,20 @@ function platformMatches(value, hosts) {
 
 function isBilibiliURL(value) { return platformMatches(value, ALLOWED_HOSTS); }
 function isDouyinURL(value) { return platformMatches(value, DOUYIN_HOSTS); }
+function weChatCaptureID(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'channels.weixin.qq.com' &&
+      !url.username && !url.password && !url.port && !url.search && !url.hash &&
+      /^\/bilifetch-capture\/[a-f0-9]{32}$/.test(url.pathname) ? url.pathname.split('/').pop() : null;
+  } catch { return null; }
+}
+function isWeChatURL(value) {
+  try {
+    const url = new URL(value);
+    return Boolean(weChatCaptureID(value) || (url.hostname === 'weixin.qq.com' && /^\/sph\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)));
+  } catch { return false; }
+}
 
 function validateVideoURL(value) {
   const urls = new Set();
@@ -52,7 +67,7 @@ function validateVideoURL(value) {
   for (const candidate of candidates) {
     try {
       const url = new URL(candidate.replace(/[.,;!]+$/, ''));
-      if (/^https?:\/\/[^/]*@/i.test(candidate) || url.username || url.password || url.port || (!isBilibiliURL(url) && !isDouyinURL(url))) continue;
+      if (/^https?:\/\/[^/]*@/i.test(candidate) || url.username || url.password || url.port || (!isBilibiliURL(url) && !isDouyinURL(url) && !isWeChatURL(url))) continue;
       url.hash = '';
       urls.add(url.toString());
     } catch { /* Sharing text can contain incomplete URLs. */ }
@@ -325,7 +340,7 @@ function hasCompleteToolset(tools) {
   return Boolean(tools?.ytdlp && tools?.ffmpeg && tools?.ffprobe && tools?.aria2);
 }
 
-function buildDownloadArguments({ item, destination, settings, tools, outputTemplate, aria2RPC = null }) {
+function buildDownloadArguments({ item, destination, settings, tools, outputTemplate, aria2RPC = null, weChatManifest = null }) {
   const args = [
     '--ignore-config', '--no-colors', '--newline', '--continue', '--part',
     '--no-overwrites', '--retries', '8', '--fragment-retries', '8',
@@ -355,7 +370,13 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
       downloaderArguments
     );
   }
-  args.push('--', item.url);
+  if (weChatCaptureID(item.url) && weChatManifest) {
+    args.push('--proxy', '', '--load-info-json', weChatManifest);
+    if (settings.engine === 'aria2' && tools.aria2) {
+      const offset = args.indexOf('--downloader-args') + 1;
+      args[offset] += ' --all-proxy=';
+    }
+  } else { args.push('--', item.url); }
   return args;
 }
 
@@ -367,6 +388,8 @@ module.exports = {
   friendlyResolveError,
   isBilibiliURL,
   isDouyinURL,
+  isWeChatURL,
+  weChatCaptureID,
   hasOuterCollectionContext,
   hasCompleteToolset,
   isPlausibleFinalVideo,

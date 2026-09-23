@@ -5,6 +5,8 @@ struct ContentView: View {
     @ObservedObject var model: DownloadViewModel
     @ObservedObject var updater: MacAppUpdater
     @State private var showAdvanced = false
+    @State private var showWeChatCapture = false
+    @State private var weChatCaptureActive = false
     @State private var showBilibiliLogin = false
     @State private var showUpdate = false
     @State private var checkedUpdatesOnLaunch = false
@@ -54,6 +56,10 @@ struct ContentView: View {
         .sheet(isPresented: $showBilibiliLogin) {
             BilibiliLoginSheet(model: model)
         }
+        .sheet(isPresented: $showWeChatCapture) {
+            WeChatCaptureSheet(model: model, capture: model.weChatCapture)
+        }
+        .onReceive(model.weChatCapture.$active) { weChatCaptureActive = $0 }
         .sheet(isPresented: $showUpdate) {
             updateSheet
         }
@@ -80,7 +86,7 @@ struct ContentView: View {
                 .shadow(color: .purple.opacity(0.32), radius: 8, y: 3)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("BiliFetch")
+                Text("记住你宇哥")
                     .font(.system(size: 25, weight: .bold, design: .rounded))
                 Text("粘贴后先解析分集，再勾选下载")
                     .font(.callout)
@@ -90,6 +96,9 @@ struct ContentView: View {
             VStack(alignment: .trailing, spacing: 7) {
                 backendBadge
                 HStack(spacing: 7) {
+                    Button(weChatCaptureActive ? "视频号捕获 · 已开启" : "视频号捕获") { showWeChatCapture = true }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     Button(action: checkForUpdates) {
                         Label(
                             updater.phase == .available ? "发现更新" : "检查更新",
@@ -132,7 +141,7 @@ struct ContentView: View {
         card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    Label("B 站 / 抖音作品", systemImage: "link")
+                    Label("B 站 / 抖音 / 视频号", systemImage: "link")
                         .font(.headline)
                     Spacer()
                     Label(
@@ -377,7 +386,7 @@ struct ContentView: View {
     private var updateSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Label("BiliFetch 软件更新", systemImage: "arrow.down.app.fill")
+                Label("记住你宇哥 · 软件更新", systemImage: "arrow.down.app.fill")
                     .font(.title3.bold())
                 Spacer()
                 Button("关闭") {
@@ -419,7 +428,18 @@ struct ContentView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(.pink)
                 } else if updater.phase == .ready {
-                    Button("退出并升级", action: updater.install)
+                    Button("退出并升级") {
+                        Task { @MainActor in
+                            do {
+                                if model.weChatCapture.isRunning { try await model.weChatCapture.stop() }
+                                updater.install()
+                            } catch {
+                                model.weChatCapture.error = error.localizedDescription
+                                showUpdate = false
+                                showWeChatCapture = true
+                            }
+                        }
+                    }
                         .buttonStyle(.borderedProminent)
                         .tint(.pink)
                         .disabled(model.isBusy)

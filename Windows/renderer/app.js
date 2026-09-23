@@ -1,5 +1,45 @@
 'use strict';
 
+const captureUI = { active:false, busy:false, polling:false, timer:null, selected:new Set() };
+async function refreshCapture() {
+  if (captureUI.polling || captureUI.busy) return;
+  captureUI.polling = true;
+  try {
+    const result = await window.biliFetch.captureState();
+    captureUI.active = result.active;
+    $('#captureStatus').textContent = result.message;
+    $('#toggleCaptureButton').textContent = result.active ? '关闭捕获' : '开启捕获';
+    $('#captureButton').textContent = result.active ? '视频号 · 捕获中' : '视频号捕获';
+    const existing = new Set(result.captures.map(video => video.id));
+    captureUI.selected = new Set([...captureUI.selected].filter(id => existing.has(id)));
+    $('#captureList').replaceChildren();
+    for (const video of result.captures) {
+      const row = document.createElement('label'); row.className = 'capture-row';
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = captureUI.selected.has(video.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) captureUI.selected.add(video.id); else captureUI.selected.delete(video.id);
+        $('#addCaptureButton').disabled = !captureUI.selected.size || state.downloading || state.resolving;
+      });
+      const title = document.createElement('span'); title.textContent = video.title;
+      const detail = document.createElement('small'); detail.textContent = video.author + ' · ' + video.formatCount + ' 个可用画质';
+      title.append(detail); row.append(checkbox, title); $('#captureList').append(row);
+    }
+    if (!result.captures.length) $('#captureList').textContent = '等待你在微信中播放视频…';
+    $('#addCaptureButton').disabled = !captureUI.selected.size || state.downloading || state.resolving;
+    $('#clearCaptureButton').disabled = state.downloading;
+  } catch (error) { $('#captureStatus').textContent = error.message; }
+  finally { captureUI.polling = false; }
+}
+async function captureAction(action) {
+  if (captureUI.busy) return;
+  captureUI.busy = true; $('#toggleCaptureButton').disabled = true;
+  let failed = false;
+  try { await action(); }
+  catch (error) { failed = true; $('#captureStatus').textContent = error.message; }
+  finally { captureUI.busy = false; $('#toggleCaptureButton').disabled = false; }
+  if (!failed) await refreshCapture();
+}
+
 const $ = (selector) => document.querySelector(selector);
 const state = {
   preview: null, destination: '', settings: {}, tasks: new Map(), downloading: false,
@@ -12,6 +52,27 @@ const statusText = {
   ready: '待下载', queued: '排队中', downloading: '下载中', retrying: '正在重试',
   paused: '已暂停', completed: '已完成', failed: '永久失败', cancelled: '已取消'
 };
+
+$('#captureButton').addEventListener('click', () => {
+  $('#captureDialog').showModal(); refreshCapture();
+  clearInterval(captureUI.timer); captureUI.timer = setInterval(refreshCapture, 1500);
+});
+$('#closeCaptureButton').addEventListener('click', () => $('#captureDialog').close());
+$('#captureDialog').addEventListener('close', () => { clearInterval(captureUI.timer); captureUI.timer = null; });
+$('#toggleCaptureButton').addEventListener('click', () => captureAction(() => captureUI.active ? window.biliFetch.captureStop() : window.biliFetch.captureStart()));
+$('#clearCaptureButton').addEventListener('click', () => captureAction(async () => { await window.biliFetch.captureClear(); captureUI.selected.clear(); }));
+$('#captureDiagnosticsButton').addEventListener('click', () => captureAction(() => window.biliFetch.captureDiagnostics()));
+$('#addCaptureButton').addEventListener('click', () => captureAction(async () => {
+  if (state.downloading || state.resolving) return;
+  const preview = await window.biliFetch.capturePreview([...captureUI.selected]);
+  if (state.downloading || state.resolving) return;
+  state.resolveGeneration += 1; state.activeResolveID = ''; state.preview = preview; state.tasks.clear();
+  preview.items.forEach(item => state.tasks.set(item.key, item));
+  $('#sourceURL').value = preview.sourceURL;
+  renderPreview(); updateControls();
+  setNotice('已加入已播放的作品，请勾选后下载。', 'success');
+  $('#captureDialog').close();
+}));
 
 function setNotice(message, type = '') {
   $('#notice').textContent = message;

@@ -29,3 +29,8 @@ https://ffmpeg.org/
 
 aria2 - GPL-2.0-or-later
 https://github.com/aria2/aria2
+BiliFetch WeChat Capture
+Independent local playback detection, proxy and download integration.
+Go standard library: BSD 3-Clause; see ThirdPartyLicenses/Go-LICENSE.
+ISAAC-64: Bob Jenkins, 1996, Public Domain.
+Reference: https://burtleburtle.net/bob/c/isaac64.c

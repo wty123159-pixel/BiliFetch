@@ -23,7 +23,7 @@ struct BilibiliLoginSheet: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("登录 B 站")
                         .font(.headline)
-                    Text("使用 B 站官方扫码接口；BiliFetch 不读取或保存账号、密码。")
+                    Text("使用 B 站官方扫码接口；本软件不读取或保存账号、密码。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

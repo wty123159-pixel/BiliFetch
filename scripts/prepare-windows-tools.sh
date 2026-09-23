@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-SCRIPT_DIR="${0:A:h}"
+SCRIPT_DIR="${${(%):-%x}:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 CACHE_DIR="${BILIFETCH_WINDOWS_TOOL_CACHE:-$PROJECT_DIR/build/windows-tools-cache}"
 DESTINATION="${1:-$PROJECT_DIR/build/windows-bundled-tools}"
@@ -16,6 +16,12 @@ FFMPEG_VERSION="n9.0.1-11-ge47273f4d9"
 FFMPEG_ARCHIVE="ffmpeg-$FFMPEG_VERSION-win64-lgpl-shared-9.0.zip"
 FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-02-13-13/$FFMPEG_ARCHIVE"
 FFMPEG_SHA256="ce5ad562220905f976c57442ac2e752e8d80ab6c0a668c2caa2b3d39dde6636f"
+# BtbN keeps only the last 14 daily builds. The original archive above has
+# expired; recover the exact same binaries from our checksum-pinned release.
+# Keep the original URL/digest as provenance and accept an existing valid cache.
+FFMPEG_RELEASE_ARCHIVE="BiliFetch-Windows-x64-1.1.6.zip"
+FFMPEG_RELEASE_URL="https://github.com/wty123159-pixel/BiliFetch/releases/download/v2026.09.07-3/$FFMPEG_RELEASE_ARCHIVE"
+FFMPEG_RELEASE_SHA256="f58a944d6b63219f6c1fd2b31f3c246d94719d0ac21e790b08492255c08ee6ca"
 FFMPEG_RUNTIME_FILES=(
     avcodec-63.dll
     avdevice-63.dll
@@ -101,45 +107,79 @@ find_one() {
     print "$found"
 }
 
-mkdir -p "$CACHE_DIR"
-download_verified "$YTDLP_URL" "$CACHE_DIR/$YTDLP_ARCHIVE" "$YTDLP_SHA256" "yt-dlp $YTDLP_VERSION"
-download_verified "$FFMPEG_URL" "$CACHE_DIR/$FFMPEG_ARCHIVE" "$FFMPEG_SHA256" "FFmpeg $FFMPEG_VERSION"
-download_verified "$ARIA2_URL" "$CACHE_DIR/$ARIA2_ARCHIVE" "$ARIA2_SHA256" "aria2 $ARIA2_VERSION"
+prepare_ffmpeg() {
+    local original_archive="$CACHE_DIR/$FFMPEG_ARCHIVE"
+    if [[ -f "$original_archive" && "$(sha256_of "$original_archive")" == "$FFMPEG_SHA256" ]]; then
+        print "使用缓存：FFmpeg $FFMPEG_VERSION"
+        unzip -q "$original_archive" -d "$TEMP_DIR/ffmpeg"
+        return
+    fi
 
-mkdir -p "$TEMP_DIR/ffmpeg" "$TEMP_DIR/aria2"
-unzip -q "$CACHE_DIR/$FFMPEG_ARCHIVE" -d "$TEMP_DIR/ffmpeg"
-unzip -q "$CACHE_DIR/$ARIA2_ARCHIVE" -d "$TEMP_DIR/aria2"
+    local release_cache="$CACHE_DIR/$FFMPEG_RELEASE_ARCHIVE"
+    local previous_release="$PROJECT_DIR/build/previous-release/$FFMPEG_RELEASE_ARCHIVE"
+    if [[ ! -f "$release_cache" || "$(sha256_of "$release_cache")" != "$FFMPEG_RELEASE_SHA256" ]]; then
+        if [[ -f "$previous_release" && "$(sha256_of "$previous_release")" == "$FFMPEG_RELEASE_SHA256" ]]; then
+            print "复用已下载的历史发布包：$FFMPEG_RELEASE_ARCHIVE"
+            cp "$previous_release" "$release_cache"
+        fi
+    fi
+    download_verified "$FFMPEG_RELEASE_URL" "$release_cache" "$FFMPEG_RELEASE_SHA256" "FFmpeg 固定版本恢复包"
+    print "从已校验的发布包恢复 FFmpeg $FFMPEG_VERSION：$FFMPEG_RELEASE_URL"
+    print "恢复包 SHA-256：$FFMPEG_RELEASE_SHA256"
 
-if [[ -d "$DESTINATION" ]]; then
-    find "$DESTINATION" -depth -delete
+    # Extract only FFmpeg/FFprobe and their shared libraries, never the old app
+    # or its yt-dlp/aria2 versions. unzip fails if any required entry is absent.
+    local entries=()
+    local name
+    for name in ffmpeg.exe ffprobe.exe "${FFMPEG_RUNTIME_FILES[@]}"; do
+        entries+=("BiliFetch-win32-x64/resources/tools/$name")
+    done
+    unzip -q "$release_cache" "${entries[@]}" -d "$TEMP_DIR/ffmpeg"
+}
+
+prepare_windows_tools() {
+    mkdir -p "$CACHE_DIR" "$TEMP_DIR/ffmpeg" "$TEMP_DIR/aria2"
+    download_verified "$YTDLP_URL" "$CACHE_DIR/$YTDLP_ARCHIVE" "$YTDLP_SHA256" "yt-dlp $YTDLP_VERSION"
+    prepare_ffmpeg
+    download_verified "$ARIA2_URL" "$CACHE_DIR/$ARIA2_ARCHIVE" "$ARIA2_SHA256" "aria2 $ARIA2_VERSION"
+
+    unzip -q "$CACHE_DIR/$ARIA2_ARCHIVE" -d "$TEMP_DIR/aria2"
+
+    if [[ -d "$DESTINATION" ]]; then
+        find "$DESTINATION" -depth -delete
+    fi
+    mkdir -p "$DESTINATION"
+    cp "$CACHE_DIR/$YTDLP_ARCHIVE" "$DESTINATION/yt-dlp.exe"
+    local ffmpeg_bin_dir="$(dirname "$(find_one "$TEMP_DIR/ffmpeg" ffmpeg.exe)")"
+    cp "$ffmpeg_bin_dir/ffmpeg.exe" "$DESTINATION/ffmpeg.exe"
+    cp "$ffmpeg_bin_dir/ffprobe.exe" "$DESTINATION/ffprobe.exe"
+    cp "$ffmpeg_bin_dir"/*.dll "$DESTINATION/"
+    cp "$(find_one "$TEMP_DIR/aria2" aria2c.exe)" "$DESTINATION/aria2c.exe"
+
+    for executable in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe; do
+        if [[ ! -s "$DESTINATION/$executable" ]]; then
+            print "内置组件无效：$executable"
+            exit 1
+        fi
+    done
+
+    for runtime_file in "${FFMPEG_RUNTIME_FILES[@]}"; do
+        if [[ ! -s "$DESTINATION/$runtime_file" ]]; then
+            print "FFmpeg 共享运行库不完整：缺少 $runtime_file"
+            exit 1
+        fi
+    done
+
+    printf '%s\n' \
+        "BiliFetch bundled Windows tools" \
+        "yt-dlp $YTDLP_VERSION | $YTDLP_URL | SHA-256 $YTDLP_SHA256" \
+        "FFmpeg $FFMPEG_VERSION LGPL shared | $FFMPEG_URL | SHA-256 $FFMPEG_SHA256" \
+        "aria2 $ARIA2_VERSION | $ARIA2_URL | SHA-256 $ARIA2_SHA256" \
+        > "$DESTINATION/VERSIONS.txt"
+
+    print "Windows 内置组件已准备：$DESTINATION"
+}
+
+if [[ "$ZSH_EVAL_CONTEXT" == "toplevel" ]]; then
+    prepare_windows_tools
 fi
-mkdir -p "$DESTINATION"
-cp "$CACHE_DIR/$YTDLP_ARCHIVE" "$DESTINATION/yt-dlp.exe"
-FFMPEG_BIN_DIR="$(dirname "$(find_one "$TEMP_DIR/ffmpeg" ffmpeg.exe)")"
-cp "$FFMPEG_BIN_DIR/ffmpeg.exe" "$DESTINATION/ffmpeg.exe"
-cp "$FFMPEG_BIN_DIR/ffprobe.exe" "$DESTINATION/ffprobe.exe"
-cp "$FFMPEG_BIN_DIR"/*.dll "$DESTINATION/"
-cp "$(find_one "$TEMP_DIR/aria2" aria2c.exe)" "$DESTINATION/aria2c.exe"
-
-for executable in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe; do
-    if [[ ! -s "$DESTINATION/$executable" ]]; then
-        print "内置组件无效：$executable"
-        exit 1
-    fi
-done
-
-for runtime_file in "${FFMPEG_RUNTIME_FILES[@]}"; do
-    if [[ ! -s "$DESTINATION/$runtime_file" ]]; then
-        print "FFmpeg 共享运行库不完整：缺少 $runtime_file"
-        exit 1
-    fi
-done
-
-printf '%s\n' \
-    "BiliFetch bundled Windows tools" \
-    "yt-dlp $YTDLP_VERSION | $YTDLP_URL | SHA-256 $YTDLP_SHA256" \
-    "FFmpeg $FFMPEG_VERSION LGPL shared | $FFMPEG_URL | SHA-256 $FFMPEG_SHA256" \
-    "aria2 $ARIA2_VERSION | $ARIA2_URL | SHA-256 $ARIA2_SHA256" \
-    > "$DESTINATION/VERSIONS.txt"
-
-print "Windows 内置组件已准备：$DESTINATION"

@@ -313,7 +313,7 @@ enum AppUpdateError: LocalizedError {
         case .checksumMismatch: return "更新包 SHA-256 校验失败，已删除可疑文件。"
         case .archiveInvalid: return "更新包中没有找到 BiliFetch.app。"
         case .invalidDelta(let message): return message
-        case .appLocationNotWritable: return "当前应用所在目录不可写，请把 BiliFetch 放到个人“应用程序”或其他可写目录后再升级。"
+        case .appLocationNotWritable: return "当前应用所在目录不可写，请把“记住你宇哥”放到个人“应用程序”或其他可写目录后再升级。"
         case .developmentBuild: return "开发运行模式不能执行原地升级。"
         }
     }

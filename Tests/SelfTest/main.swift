@@ -431,6 +431,21 @@ for _ in 1...20 {
 check(concurrentGroup.wait(timeout: .now() + 5) == .success, "runs twenty short processes concurrently to exercise EOF/exit races")
 check(concurrentCodes.count == 20 && concurrentCodes.allSatisfy { $0 == 0 }, "finishes every concurrent process exactly once with its actual exit code: \(concurrentCodes)")
 
+let weChatID = String(repeating: "a", count: 32)
+let weChatURL = URL(string: "https://channels.weixin.qq.com/bilifetch-capture/" + weChatID)!
+check(URLClassifier.weChatCaptureID(weChatURL) == weChatID, "recognizes local WeChat capture IDs")
+check(URLClassifier.validatedURL(from: "看作品 https://weixin.qq.com/sph/AcTp5SxKyW") != nil, "accepts WeChat share text for capture guidance")
+check(URLClassifier.validatedURL(from: "https://weixin.qq.com/other") == nil, "rejects unrelated WeChat URLs")
+check(URLClassifier.validatedURL(from: "https://evil.channels.weixin.qq.com/bilifetch-capture/" + weChatID) == nil, "rejects capture host impersonation")
+let weChatRequest = DownloadRequest(url: weChatURL, destination: URL(fileURLWithPath: "/tmp/videos"), scope: .current, quality: .best, cookies: .chrome,
+    includeSubtitles: false, engine: .aria2, outputTemplate: nil, cookieFileURL: URL(fileURLWithPath: "/tmp/cookies"),
+    weChatManifestURL: URL(fileURLWithPath: "/tmp/captured.info.json"))
+let weChatArguments = DownloadArgumentBuilder.arguments(for: weChatRequest, ffmpegPath: "/tmp/ffmpeg", aria2Path: "/tmp/aria2c")
+check(weChatArguments.contains("--load-info-json") && !weChatArguments.contains(weChatURL.absoluteString), "captured media uses fresh private download metadata")
+check(!weChatArguments.contains("--cookies") && !weChatArguments.contains("--cookies-from-browser"), "WeChat downloads never reuse Bilibili or browser cookies")
+check(weChatArguments.contains("--continue") && weChatArguments.contains("--part"), "WeChat downloads retain pause and resume arguments")
+check(ThumbnailRequestPolicy.referer(for: URL(string: "https://finder.video.qq.com/cover")!) == "https://channels.weixin.qq.com/", "WeChat thumbnails use platform referer")
+
 if failures > 0 {
     print("\n\(failures) self-test(s) failed")
     exit(1)

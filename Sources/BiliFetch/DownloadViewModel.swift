@@ -58,6 +58,7 @@ final class DownloadViewModel: ObservableObject {
         let concurrency: Int
         let selectedIndexes: [Int]
         let remainingIndexes: [Int]
+        var capturedIDs: [String]? = nil
     }
 
     @Published var link = ""
@@ -82,6 +83,7 @@ final class DownloadViewModel: ObservableObject {
     @Published var bilibiliLoginStatus = "未登录"
     @Published var isPaused = false
     @Published var requiresReanalysisAfterPermanentFailure = false
+    let weChatCapture: WeChatCaptureController
 
     private var activeCollectionResolver: CollectionResolver?
     private var activeAnalysisID: UUID?
@@ -114,7 +116,8 @@ final class DownloadViewModel: ObservableObject {
     private var networkIsAvailable = true
     private var logLines: [String] = []
 
-    init() {
+    init(capture: WeChatCaptureController? = nil) {
+        weChatCapture = capture ?? WeChatCaptureController()
         let defaultDestination = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
             .appendingPathComponent("BiliFetch", isDirectory: true)
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/BiliFetch")
@@ -263,6 +266,7 @@ final class DownloadViewModel: ObservableObject {
 
     func scopeDidChange() {
         guard !isDownloading else { return }
+        if let url = URLClassifier.validatedURL(from: link), URLClassifier.weChatCaptureID(url) != nil { return }
         if isAnalyzing {
             cancelActiveCollectionAnalysis()
             state = .idle
@@ -352,9 +356,55 @@ final class DownloadViewModel: ObservableObject {
         resolveCollection(isAutomaticProbe: scope == .automatic)
     }
 
+    func useWeChatCaptures(_ videos: [WeChatCapturedVideo]) {
+        guard !isDownloading, let first = videos.first else { return }
+        automaticAnalysisTask?.cancel()
+        activeCollectionResolver?.cancel()
+        activeAnalysisID = nil
+        link = first.sourceURL
+        collectionSourceURL = first.sourceURL
+        automaticDetectionURL = first.sourceURL
+        automaticDetectedCollection = videos.count > 1
+        collectionTitle = "视频号 · 已播放作品"
+        collectionItems = videos.enumerated().map { index, video in
+            CollectionItem(id: video.id, index: index + 1, total: videos.count,
+                           title: video.title, url: URL(string: video.sourceURL)!,
+                           thumbnailURL: URL(string: video.thumbnail), duration: video.duration,
+                           isSelected: true, status: .pending)
+        }
+        requiresReanalysisAfterPermanentFailure = false
+        state = .idle
+        statusText = "已加入已播放的作品，请勾选后下载"
+    }
+
     private func resolveCollection(isAutomaticProbe: Bool) {
         guard let url = URLClassifier.validatedURL(from: link) else {
             state = .failed("请一次粘贴一条 B 站或抖音视频链接，可包含整段分享文字。")
+            return
+        }
+        if URLClassifier.isWeChat(url) {
+            guard let id = URLClassifier.weChatCaptureID(url) else {
+                state = .failed("请打开「视频号捕获」，开启后在电脑微信中重新打开并播放这条作品。")
+                return
+            }
+            automaticAnalysisTask?.cancel()
+            activeCollectionResolver?.cancel()
+            let analysisID = UUID()
+            activeAnalysisID = analysisID
+            state = .analyzing
+            let ids = pendingResumeSnapshot?.capturedIDs ?? [id]
+            Task { @MainActor in
+                do {
+                    let videos = try await weChatCapture.capturedVideos(ids: ids)
+                    guard activeAnalysisID == analysisID, URLClassifier.validatedURL(from: link) == url else { return }
+                    useWeChatCaptures(videos)
+                    applyPendingResumeSnapshotIfNeeded(sourceURL: url.absoluteString)
+                } catch {
+                    guard activeAnalysisID == analysisID else { return }
+                    activeAnalysisID = nil
+                    state = .failed(error.localizedDescription)
+                }
+            }
             return
         }
         guard let ytDLP = backend.ytDLP else {
@@ -616,7 +666,7 @@ final class DownloadViewModel: ObservableObject {
         guard powerActivity == nil else { return }
         powerActivity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled, .suddenTerminationDisabled],
-            reason: "BiliFetch 正在下载视频"
+            reason: "记住你宇哥 正在下载视频"
         )
     }
 
@@ -796,13 +846,23 @@ final class DownloadViewModel: ObservableObject {
             logLines: []
         )
 
+        Task { @MainActor in
+        do {
+        var prepared = request
+        if let id = URLClassifier.weChatCaptureID(request.url) {
+            prepared.weChatManifestURL = try await weChatCapture.manifest(id: id)
+        }
+        guard activeJobs[jobID] != nil else { return }
+        guard !isPaused, !wasCancelled, !pauseRequestedJobIDs.contains(jobID) else {
+            handleDownloadFinished(jobID: jobID, exitCode: -15)
+            return
+        }
         let arguments = DownloadArgumentBuilder.arguments(
-            for: request,
+            for: prepared,
             ffmpegPath: ffmpeg.path,
             aria2Path: backend.aria2c?.path,
             aria2RPC: aria2RPC
         )
-        do {
             try service.start(
                 executable: ytDLP,
                 arguments: arguments,
@@ -831,6 +891,7 @@ final class DownloadViewModel: ObservableObject {
                 activeJobs[jobID] = job
             }
             handleDownloadFinished(jobID: jobID, exitCode: -1)
+        }
         }
     }
 
@@ -1358,7 +1419,9 @@ final class DownloadViewModel: ObservableObject {
             engine: engine.rawValue,
             concurrency: DownloadConcurrencyPolicy.clamped(downloadConcurrency),
             selectedIndexes: selected.map(\.index).sorted(),
-            remainingIndexes: remaining.map(\.index).sorted()
+            remainingIndexes: remaining.map(\.index).sorted(),
+            capturedIDs: URLClassifier.weChatCaptureID(URL(string: sourceURL)!) != nil
+                ? collectionItems.compactMap { URLClassifier.weChatCaptureID($0.url) } : nil
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         defaults.set(data, forKey: resumeSnapshotKey)

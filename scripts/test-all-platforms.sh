@@ -14,6 +14,8 @@ if [[ -z "$PNPM_BIN" || -z "$NODE_BIN" ]]; then
 fi
 
 "$PROJECT_DIR/scripts/run-tests.sh"
+zsh "$PROJECT_DIR/scripts/build-wechat-capture.sh" test
+zsh "$PROJECT_DIR/scripts/build-wechat-capture.sh" macos
 zsh "$PROJECT_DIR/scripts/test-douyin-extractor.sh"
 "$NODE_BIN" --test "$PROJECT_DIR/scripts/tests/"*.test.mjs
 
@@ -21,6 +23,7 @@ cd "$PROJECT_DIR/Windows"
 "$PNPM_BIN" install --frozen-lockfile --config.node-linker=hoisted
 "$NODE_BIN" --check main.js
 "$NODE_BIN" --check update-files.js
+"$NODE_BIN" --check wechat-capture.js
 "$NODE_BIN" --check renderer/app.js
 "$NODE_BIN" --test tests/*.test.js
 "$NODE_BIN" "$PROJECT_DIR/scripts/test-electron-update.mjs"

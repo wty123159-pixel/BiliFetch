@@ -26,8 +26,9 @@ if (!executable) {
     executable = require('electron');
   }
 }
-await run(executable, ['--test', path.join(root, 'Windows/tests/update-files.test.js')], {
+await run(executable, ['--test', path.join(root, 'Windows/tests/update-files.test.js'), path.join(root,'Windows/tests/wechat-capture.test.js')], {
   ...process.env,
   ELECTRON_RUN_AS_NODE: '1',
-  BILIFETCH_ELECTRON_TEST_VERSION: require('electron/package.json').version
+  BILIFETCH_ELECTRON_TEST_VERSION: require('electron/package.json').version,
+  BILIFETCH_CAPTURE_TEST_BIN: path.join(root,'build/wechat-capture',process.platform==='win32'?'bilifetch-capture.exe':'bilifetch-capture-macos')
 });

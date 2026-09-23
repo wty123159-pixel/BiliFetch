@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; style-src 'self'; script-src 'self';">
-  <title>BiliFetch</title>
+  <title>记住你宇哥</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,13 +12,14 @@
     <section class="frozen-panel">
       <header class="brand-row">
         <div class="brand">
-          <img src="../assets/icon.png" alt="BiliFetch">
-          <div><h1>BiliFetch</h1><p>Windows 版 · 先预览，再下载视频或完整合集</p></div>
+          <img src="../assets/icon.png" alt="记住你宇哥">
+          <div><h1>记住你宇哥</h1><p>Windows 版 · 先预览，再下载视频或完整合集</p></div>
         </div>
         <div class="header-actions">
           <span id="toolStatus" class="status-pill warning"><i></i>正在检测组件</span>
           <button id="prepareButton" class="secondary hidden">修复组件</button>
           <button id="updateButton" class="secondary">检查更新</button>
+          <button id="captureButton" class="secondary">视频号捕获</button>
           <button id="advancedButton" class="secondary">高级设置</button>
         </div>
       </header>
@@ -62,6 +63,18 @@
       <div id="videoGrid" class="video-grid"></div>
     </section>
   </main>
+
+  <dialog id="captureDialog">
+    <div class="dialog-card capture-dialog">
+      <div class="dialog-title"><h2>视频号播放捕获</h2><button id="closeCaptureButton" class="icon-button">×</button></div>
+      <p class="field-help">开启捕获后，在电脑微信中重新打开并播放目标视频。只收录当前实际播放的作品，预加载视频不会进入列表。</p>
+      <div class="dialog-actions"><button id="toggleCaptureButton" class="primary">开启捕获</button><button id="captureDiagnosticsButton" class="secondary">导出诊断</button><button id="clearCaptureButton" class="quiet">清空记录</button></div>
+      <p id="captureStatus" role="status">正在连接本机组件…</p>
+      <div id="captureList" class="capture-list"></div>
+      <p class="field-help">关闭捕获会恢复网络设置，列表中的作品仍可下载。</p>
+      <button id="addCaptureButton" class="primary full" disabled>加入下载列表</button>
+    </div>
+  </dialog>
 
   <dialog id="advancedDialog">
     <form method="dialog" class="dialog-card">

@@ -4,8 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 APP_NAME="BiliFetch"
-APP_VERSION="1.5.14"
-APP_BUILD="24"
+APP_DISPLAY_NAME="记住你宇哥"
+APP_VERSION="1.5.16"
+APP_BUILD="26"
 BUILD_DIR="$PROJECT_DIR/.build/release"
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" == "arm64" ]]; then
@@ -23,6 +24,7 @@ USER_TOOLS_DIR="$HOME/Library/Application Support/BiliFetch/Tools"
 VENDOR_TOOLS_DIR="$PROJECT_DIR/Vendor/Tools"
 
 cd "$PROJECT_DIR"
+zsh "$PROJECT_DIR/scripts/build-wechat-capture.sh" macos
 swift build -c release
 mkdir -p "$OTHER_BUILD_DIR"
 swiftc \
@@ -82,10 +84,22 @@ if [[ -f "$PROJECT_DIR/Vendor/Source/aria2-1.37.0.tar.xz" ]]; then
 fi
 
 cp "$PROJECT_DIR/THIRD_PARTY_NOTICES.md" "$RESOURCES_DIR/THIRD_PARTY_NOTICES.md"
+cp "$PROJECT_DIR/build/wechat-capture/bilifetch-capture-macos" "$RESOURCES_DIR/Tools/bilifetch-capture"
+cp "$PROJECT_DIR/build/wechat-capture/Go-LICENSE" "$RESOURCES_DIR/ThirdPartyLicenses/Go-LICENSE"
 
 /usr/libexec/PlistBuddy -c "Clear dict" "$CONTENTS_DIR/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleName string $APP_NAME" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $APP_NAME" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string en" "$CONTENTS_DIR/Info.plist"
+# Finder localizes a bundle name only when its base name matches the directory.
+# Keep the updater's legacy root and executable; localize all displayed names.
+for app_locale in en zh-Hans zh-Hant; do
+    mkdir -p "$RESOURCES_DIR/$app_locale.lproj"
+    cat > "$RESOURCES_DIR/$app_locale.lproj/InfoPlist.strings" <<EOF
+"CFBundleName" = "$APP_DISPLAY_NAME";
+"CFBundleDisplayName" = "$APP_DISPLAY_NAME";
+EOF
+done
 /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.local.BiliFetch" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string $APP_NAME" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string BiliFetch.icns" "$CONTENTS_DIR/Info.plist"
