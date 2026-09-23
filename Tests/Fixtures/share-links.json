@@ -1,0 +1,127 @@
+[
+  {
+    "name": "douyin short",
+    "input": "https://v.douyin.com/V3t4RyEfLUo/",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "user plain share",
+    "input": "2.58 复制打开抖音，看看【造梦国度的作品】《太公在此》 此后三千年，人间起屋上梁，镇宅安门，... https://v.douyin.com/V3t4RyEfLUo/ o@d.NJ 07/26 :6pm ZzG:/",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "user markdown share",
+    "input": "2.58 复制打开抖音，看看【造梦国度的作品】《太公在此》 此后三千年，人间起屋上梁，镇宅安门，... [https://v.douyin.com/V3t4RyEfLUo/](https://v.douyin.com/V3t4RyEfLUo/) o\\@d.NJ 07/26 :6pm ZzG:/",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "line breaks",
+    "input": "复制打开抖音\nhttps://v.douyin.com/V3t4RyEfLUo/\n点击查看",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "no space chinese",
+    "input": "分享：https://v.douyin.com/V3t4RyEfLUo/，复制打开抖音",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "brackets",
+    "input": "（https://v.douyin.com/V3t4RyEfLUo/）",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "punctuation",
+    "input": "https://v.douyin.com/V3t4RyEfLUo/.",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "canonical",
+    "input": "https://www.douyin.com/video/7688293605819075875#detail",
+    "expected": "https://www.douyin.com/video/7688293605819075875"
+  },
+  {
+    "name": "mobile share",
+    "input": "https://www.iesdouyin.com/share/video/7688293605819075875/",
+    "expected": "https://www.iesdouyin.com/share/video/7688293605819075875/"
+  },
+  {
+    "name": "modal",
+    "input": "https://www.douyin.com/?modal_id=7688293605819075875",
+    "expected": "https://www.douyin.com/?modal_id=7688293605819075875"
+  },
+  {
+    "name": "Bilibili",
+    "input": "https://www.bilibili.com/video/BV1abc?p=2&season_id=42",
+    "expected": "https://www.bilibili.com/video/BV1abc?p=2&season_id=42"
+  },
+  {
+    "name": "Bilibili share",
+    "input": "快来看 https://b23.tv/example/ 分享完毕",
+    "expected": "https://b23.tv/example/"
+  },
+  {
+    "name": "duplicates",
+    "input": "https://v.douyin.com/V3t4RyEfLUo/ https://v.douyin.com/V3t4RyEfLUo/",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "two works",
+    "input": "https://v.douyin.com/one/ https://v.douyin.com/two/",
+    "expected": null
+  },
+  {
+    "name": "two platforms",
+    "input": "https://b23.tv/one/ https://v.douyin.com/two/",
+    "expected": null
+  },
+  {
+    "name": "lookalike",
+    "input": "https://douyin.com.evil.example/video/7688293605819075875",
+    "expected": null
+  },
+  {
+    "name": "embedded in external URL",
+    "input": "https://example.com/?url=https://v.douyin.com/V3t4RyEfLUo/",
+    "expected": null
+  },
+  {
+    "name": "userinfo",
+    "input": "https://user@www.douyin.com/video/7688293605819075875",
+    "expected": null
+  },
+  {
+    "name": "wrong port",
+    "input": "https://www.douyin.com:9000/video/7688293605819075875",
+    "expected": null
+  },
+  {
+    "name": "local file",
+    "input": "file:///tmp/作品.mp4",
+    "expected": null
+  },
+  {
+    "name": "unsupported kuaishou",
+    "input": "https://v.kuaishou.com/example/",
+    "expected": null
+  },
+  {
+    "name": "unsupported tiktok",
+    "input": "https://www.tiktok.com/@x/video/123",
+    "expected": null
+  },
+  {
+    "name": "no URL",
+    "input": "2.58 复制打开抖音，看看造梦国度的作品",
+    "expected": null
+  },
+  {
+    "name": "case and default port",
+    "input": "HTTPS://V.DOUYIN.COM:443/V3t4RyEfLUo/",
+    "expected": "https://v.douyin.com/V3t4RyEfLUo/"
+  },
+  {
+    "name": "empty user info",
+    "input": "https://@www.douyin.com/video/7688293605819075875",
+    "expected": null
+  }
+]

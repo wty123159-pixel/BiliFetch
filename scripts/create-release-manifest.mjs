@@ -109,7 +109,18 @@ function mergedHistory(platform, releaseVersion, currentNotes, publishedAt, seed
   for (const entry of candidates) {
     if (compareVersions(entry.version, releaseVersion) <= 0) entries.set(entry.version, entry);
   }
-  entries.set(releaseVersion, { version: releaseVersion, notes: currentNotes, publishedAt });
+  const previousVersion = platform === 'windows' ? previous?.version : previous?.macos?.version;
+  const unchanged = previousVersion && compareVersions(previousVersion, releaseVersion) === 0;
+  // A Windows-only release must not replace the existing macOS version's
+  // changelog with Windows notes (and vice versa).
+  if (!unchanged || !entries.has(releaseVersion)) {
+    const previousNotes = previous?.[platform]?.notes || (platform === 'windows' ? previous?.notes : '');
+    entries.set(releaseVersion, {
+      version: releaseVersion,
+      notes: unchanged && previousNotes ? previousNotes : currentNotes,
+      publishedAt: unchanged && previous?.publishedAt ? previous.publishedAt : publishedAt
+    });
+  }
   return [...entries.values()].sort((left, right) => compareVersions(left.version, right.version));
 }
 

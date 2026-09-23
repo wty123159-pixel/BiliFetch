@@ -14,6 +14,8 @@ const extract = require('extract-zip');
 const QRCode = require('qrcode');
 const core = require('./core');
 const updateCore = require('./update-core');
+const updateFiles = require('./update-files');
+const updateIO = updateFiles.fs.promises;
 
 const APP_VERSION = require('./package.json').version;
 const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/wty123159-pixel/BiliFetch/releases/latest/download/update.json';
@@ -133,6 +135,10 @@ async function locateTools() {
   ];
   const names = { ytdlp: 'yt-dlp.exe', ffmpeg: 'ffmpeg.exe', ffprobe: 'ffprobe.exe', aria2: 'aria2c.exe' };
   const tools = {};
+  tools.pluginDirectory = [
+    path.join(process.resourcesPath, 'yt-dlp-plugins'),
+    path.join(__dirname, '..', 'Shared', 'yt-dlp-plugins')
+  ].find((directory) => fs.existsSync(path.join(directory, 'bilifetch', 'yt_dlp_plugins', 'extractor', 'douyin_share.py')));
   for (const [key, name] of Object.entries(names)) {
     for (const folder of candidates) {
       const candidate = path.join(folder, name);
@@ -304,11 +310,9 @@ async function prepareTools() {
   }
 }
 
-async function cookieArguments(settings = {}) {
+async function cookieArguments(settings = {}, url) {
   const cookieFile = userDataPath('bilibili-cookies.txt');
-  if (fs.existsSync(cookieFile)) return ['--cookies', cookieFile];
-  if (settings.browser && settings.browser !== 'none') return ['--cookies-from-browser', settings.browser];
-  return [];
+  return core.cookieArguments({ ...settings, cookieFile: fs.existsSync(cookieFile) ? cookieFile : null }, url);
 }
 
 async function resolveWithBilibiliAPI(validated) {
@@ -328,10 +332,10 @@ async function resolveWithBilibiliAPI(validated) {
 }
 
 async function resolveCollection(sourceURL, settings = {}, requestID = '') {
-  const validated = core.validateBilibiliURL(sourceURL);
-  if (!validated) throw new Error('请输入有效的 B 站视频或合集链接。');
+  const validated = core.validateVideoURL(sourceURL);
+  if (!validated) throw new Error('请一次粘贴一条 B 站或抖音视频链接，可包含整段分享文字。');
   let singleVideoFallback = null;
-  const isBVIDVideo = /\/video\/BV[0-9A-Za-z]+/i.test(new URL(validated).pathname);
+  const isBVIDVideo = core.isBilibiliURL(validated) && /\/video\/BV[0-9A-Za-z]+/i.test(new URL(validated).pathname);
   const videoHasCollectionContext = isBVIDVideo && core.hasOuterCollectionContext(validated);
   if (isBVIDVideo) {
     send('resolve:progress', { requestID, count: 0, message: '正在读取 B 站分集封面与标题…' });
@@ -348,11 +352,15 @@ async function resolveCollection(sourceURL, settings = {}, requestID = '') {
   }
   const tools = await locateTools();
   if (!tools.ytdlp) throw new Error('内置 yt-dlp 异常，请点击“修复组件”。');
+  if (core.isDouyinURL(validated)) {
+    if (!tools.pluginDirectory) throw new Error('抖音解析组件缺失，请重新完整解压最新版。');
+    send('resolve:progress', { requestID, count: 0, message: '正在读取抖音作品…' });
+  }
   const args = [
     '--ignore-config', '--no-colors', '--newline', '--skip-download',
-    '--ignore-no-formats-error', '--yes-playlist', '--no-warnings',
+    '--ignore-no-formats-error', core.isBilibiliURL(validated) ? '--yes-playlist' : '--no-playlist', '--no-warnings',
     '--print', '%(.{id,title,webpage_url,original_url,url,thumbnail,duration,playlist,playlist_title,playlist_index,playlist_count})j',
-    ...(await cookieArguments(settings)), '--', validated
+    ...(await cookieArguments(settings, validated)), ...core.pluginArguments(validated, tools.pluginDirectory), '--', validated
   ];
   const lines = [];
   const diagnostics = [];
@@ -370,7 +378,7 @@ async function resolveCollection(sourceURL, settings = {}, requestID = '') {
       return singleVideoFallback;
     }
     const detail = diagnostics.slice(-8).join('\n');
-    throw new Error(detail || '没有解析到可下载的视频。');
+    throw new Error(core.friendlyResolveError(detail, validated));
   }
   const preview = core.parsePreviewLines(lines, validated);
   if (videoHasCollectionContext && preview.items.length <= 1) {
@@ -379,23 +387,19 @@ async function resolveCollection(sourceURL, settings = {}, requestID = '') {
   return preview;
 }
 
-function thumbnailAllowed(url) {
-  const host = url.hostname.toLowerCase();
-  return ['hdslb.com', 'bilibili.com', 'biliimg.com'].some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-}
-
 async function loadThumbnail(source) {
   const normalized = core.normalizeThumbnailURL(source);
   if (!normalized) return null;
   if (thumbnailCache.has(normalized)) return thumbnailCache.get(normalized);
   const request = (async () => {
     const url = new URL(normalized);
-    if (!thumbnailAllowed(url)) throw new Error('缩略图来源不受信任。');
+    const referer = core.thumbnailReferer(url);
+    if (!referer) throw new Error('缩略图来源不受信任。');
     const response = await fetch(url, {
       signal: AbortSignal.timeout(15000),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-        Referer: 'https://www.bilibili.com/'
+        Referer: referer
       }
     });
     if (!response.ok) throw new Error(`缩略图返回 HTTP ${response.status}`);
@@ -528,6 +532,9 @@ class DownloadManager {
     if (aria2RPC) this.startAria2ProgressMonitor(context, task);
     const onLine = (line) => {
       send('downloads:log', `[${task.index}] ${line}`);
+      if (core.isDouyinURL(task.url) && line.includes('BILIFETCH_DOUYIN:')) {
+        context.douyinError = core.friendlyResolveError(line, task.url);
+      }
       const progress = core.parseProgress(line);
       if (progress && !context.aria2RPC) {
         task.progress = Math.max(task.progress, progress.percent);
@@ -560,7 +567,7 @@ class DownloadManager {
         await this.cleanupResiduals(verified.path);
       } else {
         task.retries += 1;
-        task.error = verified.reason || `下载进程退出（代码 ${code}）`;
+        task.error = context.douyinError || verified.reason || `下载进程退出（代码 ${code}）`;
         if (task.retries <= 3) {
           task.status = 'retrying'; task.speed = `等待第 ${task.retries} 次重试…`;
           this.emitTask(task);
@@ -742,65 +749,6 @@ class DownloadManager {
   }
 }
 
-async function sha256File(file) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    const input = fs.createReadStream(file);
-    input.on('error', reject);
-    input.on('data', (chunk) => hash.update(chunk));
-    input.on('end', () => resolve(hash.digest('hex')));
-  });
-}
-
-function safeUpdateChild(root, relativePath) {
-  if (!updateCore.isSafeRelativePath(relativePath)) throw new Error('增量包包含不安全的文件路径。');
-  const normalizedRoot = path.resolve(root);
-  const candidate = path.resolve(normalizedRoot, ...relativePath.split('/'));
-  if (!candidate.startsWith(`${normalizedRoot}${path.sep}`)) throw new Error('增量包文件超出应用目录。');
-  return candidate;
-}
-
-async function applyBinaryUpdatePatch(patch, dataFile, baseFile) {
-  const [baseInfo, dataInfo] = await Promise.all([fsp.stat(baseFile), fsp.stat(dataFile)]);
-  if (!baseInfo.isFile() || !dataInfo.isFile() || baseInfo.size !== patch.baseSize || dataInfo.size !== patch.dataSize ||
-      await sha256File(baseFile) !== patch.baseSha256 || await sha256File(dataFile) !== patch.dataSha256) {
-    throw new Error('二进制补丁的基础文件或数据校验失败。');
-  }
-  const temporary = `${baseFile}.bilifetch-patch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-  let baseHandle;
-  let dataHandle;
-  let outputHandle;
-  try {
-    try {
-      baseHandle = await fsp.open(baseFile, 'r');
-      dataHandle = await fsp.open(dataFile, 'r');
-      outputHandle = await fsp.open(temporary, 'wx');
-      const buffer = Buffer.allocUnsafe(1024 * 1024);
-      for (const operation of patch.operations) {
-        const input = operation.type === 'copy' ? baseHandle : dataHandle;
-        let position = operation.offset;
-        let remaining = operation.length;
-        while (remaining > 0) {
-          const count = Math.min(remaining, buffer.length);
-          const { bytesRead } = await input.read(buffer, 0, count, position);
-          if (bytesRead !== count) throw new Error('二进制补丁数据不完整。');
-          await outputHandle.write(buffer, 0, bytesRead, null);
-          position += bytesRead;
-          remaining -= bytesRead;
-        }
-      }
-      await outputHandle.sync();
-    } finally {
-      await Promise.allSettled([baseHandle?.close(), dataHandle?.close(), outputHandle?.close()]);
-    }
-    await fsp.rm(baseFile, { force: true });
-    await fsp.rename(temporary, baseFile);
-  } catch (error) {
-    await fsp.rm(temporary, { force: true });
-    throw error;
-  }
-}
-
 class AppUpdater {
   constructor() {
     this.available = null;
@@ -846,9 +794,10 @@ class AppUpdater {
         history: release.history || []
       }
     }, APP_VERSION);
+    this.stagedRoot = null;
     const updateDir = userDataPath('Updates', checked.version);
-    await fsp.rm(updateDir, { recursive: true, force: true });
-    await fsp.mkdir(updateDir, { recursive: true });
+    await updateIO.rm(updateDir, { recursive: true, force: true });
+    await updateIO.mkdir(updateDir, { recursive: true });
     const fullAsset = { kind: 'full', url: checked.url, sha256: checked.sha256, size: checked.size };
     const deltaAsset = checked.delta ? { kind: 'delta', ...checked.delta } : null;
     try {
@@ -856,8 +805,8 @@ class AppUpdater {
     } catch (error) {
       if (!deltaAsset) throw error;
       send('update:progress', { label: '增量更新不可用，正在改用完整更新包', percent: null });
-      await fsp.rm(updateDir, { recursive: true, force: true });
-      await fsp.mkdir(updateDir, { recursive: true });
+      await updateIO.rm(updateDir, { recursive: true, force: true });
+      await updateIO.mkdir(updateDir, { recursive: true });
       this.stagedRoot = await this.downloadAndStage(fullAsset, checked, updateDir);
     }
     this.available = checked;
@@ -871,57 +820,29 @@ class AppUpdater {
     const label = asset.kind === 'delta' ? '增量应用更新' : '完整应用更新';
     await downloadUpdateFile(asset.url, archive, label, (progress) => send('update:progress', progress));
     send('update:progress', { label: `正在校验${label}`, percent: null });
-    const digest = await sha256File(archive);
+    const digest = await updateFiles.sha256File(archive);
     if (digest !== asset.sha256) {
-      await fsp.rm(archive, { force: true });
+      await updateIO.rm(archive, { force: true });
       throw new Error('更新包 SHA-256 校验失败，已删除可疑文件。');
     }
-    await extract(archive, { dir: extracted });
+    send('update:progress', { label: `正在解压${label}`, percent: null });
+    await updateFiles.extractArchive(archive, extracted);
     if (asset.kind === 'delta') return this.stageDelta(extracted, release, updateDir);
-    const executable = await findFile(extracted, 'BiliFetch.exe');
+    const executable = await updateFiles.findFile(extracted, 'BiliFetch.exe');
     if (!executable) throw new Error('更新包中没有找到 BiliFetch.exe。');
     return path.dirname(executable);
   }
 
   async stageDelta(extracted, release, updateDir) {
     if (process.platform !== 'win32' || !app.isPackaged) throw new Error('开发运行模式不能应用增量更新。');
-    const planFile = await findFile(extracted, 'delta.json');
-    if (!planFile) throw new Error('增量包缺少 delta.json。');
-    const plan = updateCore.validateDeltaPlan(await readJSON(planFile, null), APP_VERSION, release.version);
-    const payload = path.join(path.dirname(planFile), 'payload');
-    const target = path.dirname(process.execPath);
-    const staged = path.join(updateDir, 'staged', 'BiliFetch-win32-x64');
-    await fsp.rm(staged, { recursive: true, force: true });
-    await fsp.mkdir(path.dirname(staged), { recursive: true });
-    await fsp.cp(target, staged, { recursive: true, force: true, errorOnExist: false });
-
-    for (const relativePath of plan.deletePaths) {
-      await fsp.rm(safeUpdateChild(staged, relativePath), { recursive: true, force: true });
-    }
-    for (const file of plan.files) {
-      const destination = safeUpdateChild(staged, file.path);
-      await fsp.mkdir(path.dirname(destination), { recursive: true });
-      if (file.patch) {
-        const patchData = safeUpdateChild(payload, file.patch.source);
-        await applyBinaryUpdatePatch(file.patch, patchData, destination);
-      } else {
-        const source = safeUpdateChild(payload, file.path);
-        const sourceInfo = await fsp.stat(source);
-        if (!sourceInfo.isFile() || sourceInfo.size !== file.size || await sha256File(source) !== file.sha256) {
-          throw new Error(`增量文件校验失败：${file.path}`);
-        }
-        await fsp.rm(destination, { recursive: true, force: true });
-        await fsp.copyFile(source, destination);
-      }
-      const destinationInfo = await fsp.stat(destination);
-      if (!destinationInfo.isFile() || destinationInfo.size !== file.size || await sha256File(destination) !== file.sha256) {
-        throw new Error(`应用增量后文件校验失败：${file.path}`);
-      }
-    }
-    const executable = path.join(staged, path.basename(process.execPath));
-    const executableInfo = await fsp.stat(executable);
-    if (!executableInfo.isFile()) throw new Error('增量更新未生成有效的 BiliFetch.exe。');
-    return staged;
+    return updateFiles.stageDelta({
+      extracted,
+      currentRoot: path.dirname(process.execPath),
+      currentVersion: APP_VERSION,
+      targetVersion: release.version,
+      staged: path.join(updateDir, 'staged', 'BiliFetch-win32-x64'),
+      executableName: path.basename(process.execPath)
+    });
   }
 
   async install() {
@@ -931,14 +852,14 @@ class AppUpdater {
     const hasDownloads = downloadManager?.active.size || downloadManager?.tasks.some((task) => ['queued', 'downloading', 'retrying'].includes(task.status));
     if (hasDownloads) throw new Error('请等待下载任务结束或先取消任务，再安装更新。');
     const target = path.dirname(process.execPath);
-    await fsp.access(target, fs.constants.W_OK);
+    await updateIO.access(target, fs.constants.W_OK);
     this.installing = true;
     try {
       const helper = userDataPath('Updates', `install-${Date.now()}.ps1`);
       const logFile = userDataPath('Updates', 'update-install.log');
       const lockDirectory = userDataPath('Updates', 'install-update.lock');
       const script = updateCore.createWindowsInstallScript();
-      await fsp.writeFile(helper, script, 'utf8');
+      await updateIO.writeFile(helper, script, 'utf8');
       const child = spawn('powershell.exe', [
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper,
         '-Source', this.stagedRoot,

@@ -141,3 +141,37 @@ test('writes backward-compatible full assets and optional deltas to update.json'
     await rm(temp, { recursive: true, force: true });
   }
 });
+
+for (const unchanged of ['macos', 'windows']) {
+  test(`preserves ${unchanged} release notes when only the other platform changes`, async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), 'bilifetch-platform-history-test-'));
+    try {
+      const windows = path.join(temp, `BiliFetch-Windows-x64-${unchanged === 'windows' ? '1.1.6' : '1.1.7'}.zip`);
+      const macos = path.join(temp, `BiliFetch-macOS-${unchanged === 'macos' ? '1.5.13' : '1.5.14'}.zip`);
+      const previous = {
+        version: '1.1.6', publishedAt: '2026-09-07T14:31:22.602Z',
+        windows: { history: [{ version: '1.1.6', notes: '原 Windows 说明', publishedAt: '2026-09-07T14:31:22.602Z' }] },
+        macos: { version: '1.5.13', history: [{ version: '1.5.13', notes: '原 macOS 说明', publishedAt: '2026-09-07T14:31:22.602Z' }] }
+      };
+      const previousFile = path.join(temp, 'previous.json');
+      const notes = path.join(temp, 'notes.txt');
+      const output = path.join(temp, 'update.json');
+      await Promise.all([
+        writeFile(windows, 'Windows artifact'), writeFile(macos, 'macOS artifact'),
+        writeFile(previousFile, JSON.stringify(previous)), writeFile(notes, '本次另一平台的修复')
+      ]);
+      await run(process.execPath, [
+        manifestGenerator, '--windows', windows, '--windows-url', 'https://example.com/windows.zip',
+        '--macos', macos, '--macos-url', 'https://example.com/macos.zip',
+        '--previous-manifest', previousFile, '--notes', notes, '--output', output
+      ]);
+      const manifest = JSON.parse(await readFile(output, 'utf8'));
+      assert.deepEqual(manifest[unchanged].history, previous[unchanged].history);
+      assert.doesNotMatch(manifest[unchanged].notes, /本次另一平台/);
+      const changed = unchanged === 'macos' ? 'windows' : 'macos';
+      assert.equal(manifest[changed].history.at(-1).notes, '本次另一平台的修复');
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+}

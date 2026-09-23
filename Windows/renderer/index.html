@@ -26,7 +26,7 @@
       <div class="input-row">
         <div class="url-field">
           <span class="link-icon">↗</span>
-          <input id="sourceURL" type="url" placeholder="粘贴 B 站视频、合集或多 P 链接" autocomplete="off">
+          <input id="sourceURL" type="text" placeholder="粘贴 B 站链接、抖音链接或整段分享文字" autocomplete="off">
         </div>
         <button id="pasteButton" class="secondary">粘贴</button>
         <button id="resolveButton" class="accent">解析链接</button>
@@ -70,6 +70,7 @@
       <label>下载引擎<select id="engine"><option value="aria2">高速（aria2，8 连接）</option><option value="native">标准（yt-dlp）</option></select></label>
       <label>同时下载数量<div class="range-row"><input id="concurrency" type="range" min="1" max="5" step="1"><output id="concurrencyValue">3</output></div></label>
       <label>浏览器登录状态<select id="browser"><option value="none">不读取浏览器</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="firefox">Firefox</option><option value="brave">Brave</option></select></label>
+      <p class="field-help">登录设置仅用于 B 站；抖音视频无需登录。</p>
       <label class="check-row"><input id="subtitles" type="checkbox">同时保存中文字幕（存在时）</label>
       <div class="settings-section">
         <div class="section-heading"><strong>在线更新</strong><small id="appVersion"></small></div>

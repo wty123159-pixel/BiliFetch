@@ -132,7 +132,7 @@ struct ContentView: View {
         card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    Label("视频或合集链接", systemImage: "link")
+                    Label("B 站 / 抖音作品", systemImage: "link")
                         .font(.headline)
                     Spacer()
                     Label(
@@ -151,7 +151,7 @@ struct ContentView: View {
                 }
 
                 HStack(spacing: 10) {
-                    TextField("https://www.bilibili.com/video/BV...", text: $model.link)
+                    TextField("粘贴 B 站链接、抖音链接或整段分享文字", text: $model.link)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .padding(.horizontal, 13)
@@ -179,6 +179,12 @@ struct ContentView: View {
                 HStack(spacing: 10) {
                     destinationButton
                     compactActionButton
+                }
+
+                if let url = URLClassifier.validatedURL(from: model.link), URLClassifier.isDouyin(url) {
+                    Text("抖音视频无需登录，支持直接粘贴整段分享文字。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if model.state != .idle {
@@ -321,7 +327,7 @@ struct ContentView: View {
                 .tint(model.isBilibiliLoggedIn ? .green : .pink)
             }
 
-            optionRow(title: "浏览器 Cookie", subtitle: "仅作为登录备用方式") {
+            optionRow(title: "浏览器登录状态", subtitle: "仅用于 B 站；抖音视频无需登录") {
                 Picker("", selection: $model.cookies) {
                     ForEach(BrowserCookies.allCases) { Text($0.title).tag($0) }
                 }

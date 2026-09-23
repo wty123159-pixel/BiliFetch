@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 APP_NAME="BiliFetch"
-APP_VERSION="1.5.13"
-APP_BUILD="23"
+APP_VERSION="1.5.14"
+APP_BUILD="24"
 BUILD_DIR="$PROJECT_DIR/.build/release"
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" == "arm64" ]]; then
@@ -43,6 +43,7 @@ lipo -create \
 cp "$PROJECT_DIR/scripts/prepare-tools.command" "$RESOURCES_DIR/prepare-tools.command"
 cp "$PROJECT_DIR/Assets/BiliFetch.icns" "$RESOURCES_DIR/BiliFetch.icns"
 cp "$PROJECT_DIR/Windows/update-channel.json" "$RESOURCES_DIR/update-channel.json"
+cp -R "$PROJECT_DIR/Shared/yt-dlp-plugins" "$RESOURCES_DIR/yt-dlp-plugins"
 chmod +x "$MACOS_DIR/$APP_NAME" "$RESOURCES_DIR/prepare-tools.command"
 
 for tool_name in yt-dlp ffmpeg ffprobe aria2c; do

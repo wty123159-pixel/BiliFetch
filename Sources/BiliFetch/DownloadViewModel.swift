@@ -70,7 +70,7 @@ final class DownloadViewModel: ObservableObject {
     @Published var downloadConcurrency: Int
     @Published var state: State = .idle
     @Published var progress = 0.0
-    @Published var statusText = "粘贴 B 站链接后即可下载"
+    @Published var statusText = "粘贴 B 站链接或抖音分享文字"
     @Published var detailText = ""
     @Published var currentItem = ""
     @Published var itemPosition = ""
@@ -150,6 +150,7 @@ final class DownloadViewModel: ObservableObject {
 
     var wantsCollection: Bool {
         guard let url = URLClassifier.validatedURL(from: link) else { return false }
+        guard URLClassifier.isBilibili(url) else { return false }
         switch scope {
         case .current:
             return false
@@ -353,7 +354,7 @@ final class DownloadViewModel: ObservableObject {
 
     private func resolveCollection(isAutomaticProbe: Bool) {
         guard let url = URLClassifier.validatedURL(from: link) else {
-            state = .failed("请输入有效链接后再进行解析。")
+            state = .failed("请一次粘贴一条 B 站或抖音视频链接，可包含整段分享文字。")
             return
         }
         guard let ytDLP = backend.ytDLP else {
@@ -1207,6 +1208,10 @@ final class DownloadViewModel: ObservableObject {
     }
 
     private func friendlyError(from log: String) -> String {
+        if let url = URLClassifier.validatedURL(from: link), URLClassifier.isDouyin(url),
+           log.contains("BILIFETCH_DOUYIN:") || log.contains("Fresh cookies") {
+            return DouyinErrorMessage.from(log)
+        }
         let lower = log.lowercased()
         if lower.contains("aria2c") && (lower.contains("exited with code") || lower.contains("error")) {
             return "可切换到“标准（yt-dlp）”后继续；已完成的项目不会重复下载。"

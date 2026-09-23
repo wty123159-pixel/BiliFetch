@@ -1,0 +1,7 @@
+[
+  {"name":"douyin sample cover", "url":"https://p11-sign.douyinpic.com/cover.jpg", "referer":"https://www.douyin.com/"},
+  {"name":"bilibili CDN cover", "url":"https://i0.hdslb.com/cover.jpg", "referer":"https://www.bilibili.com/"},
+  {"name":"bilibili apex cover", "url":"https://bilibili.com/cover.jpg", "referer":"https://www.bilibili.com/"},
+  {"name":"reject thumbnail lookalike", "url":"https://douyinpic.com.evil.test/cover.jpg", "referer":null},
+  {"name":"require HTTPS thumbnail", "url":"http://p11-sign.douyinpic.com/cover.jpg", "referer":null}
+]

@@ -3,6 +3,7 @@
 const path = require('node:path');
 
 const ALLOWED_HOSTS = ['bilibili.com', 'b23.tv', 'bilibili.tv'];
+const DOUYIN_HOSTS = ['douyin.com', 'iesdouyin.com'];
 const FINAL_VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.webm', '.flv', '.mov', '.m4v']);
 
 function normalizeThumbnailURL(value) {
@@ -18,17 +19,63 @@ function normalizeThumbnailURL(value) {
   }
 }
 
-function validateBilibiliURL(value) {
+function thumbnailReferer(value) {
   try {
-    const url = new URL(String(value || '').trim());
-    if (!['http:', 'https:'].includes(url.protocol)) return null;
-    const host = url.hostname.toLowerCase();
-    if (!ALLOWED_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) return null;
-    url.hash = '';
-    return url.toString();
-  } catch {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return null;
+    const matches = (hosts) => hosts.some((host) => url.hostname === host || url.hostname.endsWith('.' + host));
+    if (matches(['hdslb.com', 'bilibili.com', 'biliimg.com'])) return 'https://www.bilibili.com/';
+    if (matches(['douyinpic.com', 'douyincdn.com', 'byteimg.com', 'pstatp.com', 'ibytedtos.com'])) return 'https://www.douyin.com/';
     return null;
+  } catch { return null; }
+}
+
+function validateBilibiliURL(value) {
+  const url = validateVideoURL(value);
+  return url && isBilibiliURL(url) ? url : null;
+}
+
+function platformMatches(value, hosts) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+  } catch { return false; }
+}
+
+function isBilibiliURL(value) { return platformMatches(value, ALLOWED_HOSTS); }
+function isDouyinURL(value) { return platformMatches(value, DOUYIN_HOSTS); }
+
+function validateVideoURL(value) {
+  const urls = new Set();
+  const candidates = String(value || '').match(/(?<![A-Za-z0-9_:/@?=&%.-])https?:\/\/[^\s<>"'`\[\](){}，。！？；、【】「」《》（）…]+/gi) || [];
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate.replace(/[.,;!]+$/, ''));
+      if (/^https?:\/\/[^/]*@/i.test(candidate) || url.username || url.password || url.port || (!isBilibiliURL(url) && !isDouyinURL(url))) continue;
+      url.hash = '';
+      urls.add(url.toString());
+    } catch { /* Sharing text can contain incomplete URLs. */ }
   }
+  return urls.size === 1 ? [...urls][0] : null;
+}
+
+function cookieArguments(settings = {}, url) {
+  if (!isBilibiliURL(url)) return [];
+  if (isBilibiliURL(url) && settings.cookieFile) return ['--cookies', settings.cookieFile];
+  return settings.browser && settings.browser !== 'none' ? ['--cookies-from-browser', settings.browser] : [];
+}
+
+function pluginArguments(url, pluginDirectory) {
+  return isDouyinURL(url) && pluginDirectory
+    ? ['--no-plugin-dirs', '--plugin-dirs', pluginDirectory, '--socket-timeout', '15', '--extractor-retries', '1'] : [];
+}
+
+function friendlyResolveError(detail, url) {
+  if (!isDouyinURL(url)) return detail || '没有解析到可下载的视频。';
+  const known = String(detail).match(/BILIFETCH_DOUYIN:\s*([^\n]+)/);
+  if (known) return known[1];
+  return '暂时无法免登录读取这条抖音作品。请稍后重试或重新复制作品分享链接；私密、已删除或受限作品可能无法下载。';
 }
 
 function hasOuterCollectionContext(value) {
@@ -84,11 +131,11 @@ function canonicalItemURL(entry, sourceURL, index) {
   const sourceBvid = String(sourceURL || '').match(/BV[0-9A-Za-z]+/i)?.[0]?.toLowerCase();
   const candidates = [entry.webpage_url, entry.original_url, entry.url];
   for (const candidate of candidates) {
-    const validated = validateBilibiliURL(candidate);
+    const validated = validateVideoURL(candidate);
     if (validated) {
       const url = new URL(validated);
       const candidateBvid = url.pathname.match(/BV[0-9A-Za-z]+/i)?.[0]?.toLowerCase();
-      if (sourceBvid && candidateBvid === sourceBvid && index > 0 && !url.searchParams.has('p')) {
+      if (isBilibiliURL(url) && sourceBvid && candidateBvid === sourceBvid && index > 0 && !url.searchParams.has('p')) {
         url.searchParams.set('p', String(index));
       }
       return url.toString();
@@ -96,7 +143,7 @@ function canonicalItemURL(entry, sourceURL, index) {
   }
   try {
     const source = new URL(sourceURL);
-    if (/\/video\/BV[0-9A-Za-z]+/i.test(source.pathname) && index > 0) {
+    if (isBilibiliURL(source) && /\/video\/BV[0-9A-Za-z]+/i.test(source.pathname) && index > 0) {
       source.searchParams.set('p', String(index));
     }
     return source.toString();
@@ -296,8 +343,7 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
   if (settings.subtitles) {
     args.push('--write-subs', '--write-auto-subs', '--sub-langs', 'zh-Hans,zh-Hant,zh.*', '--convert-subs', 'srt');
   }
-  if (settings.cookieFile) args.push('--cookies', settings.cookieFile);
-  else if (settings.browser && settings.browser !== 'none') args.push('--cookies-from-browser', settings.browser);
+  args.push(...cookieArguments(settings, item.url), ...pluginArguments(item.url, tools.pluginDirectory));
   if (settings.engine === 'aria2' && tools.aria2) {
     let downloaderArguments = 'aria2c:--continue=true -x 8 -s 8 -k 1M --auto-file-renaming=false --allow-overwrite=false --file-allocation=none --summary-interval=1 --show-console-readout=true --console-log-level=warn --enable-color=false';
     if (aria2RPC) {
@@ -316,16 +362,23 @@ function buildDownloadArguments({ item, destination, settings, tools, outputTemp
 module.exports = {
   aggregateAria2Progress,
   buildDownloadArguments,
+  cookieArguments,
+  pluginArguments,
+  friendlyResolveError,
+  isBilibiliURL,
+  isDouyinURL,
   hasOuterCollectionContext,
   hasCompleteToolset,
   isPlausibleFinalVideo,
   mapAria2Progress,
   normalizeThumbnailURL,
+  thumbnailReferer,
   parseBilibiliViewMetadata,
   parseCompletedPath,
   parsePreviewLines,
   parseProgress,
   qualitySelector,
   safePathSegment,
-  validateBilibiliURL
+  validateBilibiliURL,
+  validateVideoURL
 };

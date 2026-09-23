@@ -1,10 +1,12 @@
 # BiliFetch for Windows
 
+1.1.8 接入抖音单条视频的分享链接和整段分享文案，解析入口与 B 站共用。抖音无需登录或导入 Cookie，登录设置仍只用于 B 站。共享解析器已在 macOS 使用内置工具完成用户样例的免登录下载与音视频检查；Windows 未做真机运行、安装和下载实测，详见根目录 README 的验证边界。
+
 支持 Windows 10/11 x64。粘贴 B 站视频、合集或多 P 链接后，先解析封面和标题并勾选分集，再开始下载。
 
 ## 使用
 
-1. 解压整个 `BiliFetch-Windows-x64-1.1.6.zip`，不要只复制其中的 `BiliFetch.exe`。
+1. 解压整个 `BiliFetch-Windows-x64-1.1.8.zip`，不要只复制其中的 `BiliFetch.exe`。
 2. 双击 `BiliFetch.exe`。
 3. 软件会自动检测并调用包内的 yt-dlp、FFmpeg、FFprobe 和 aria2，不需要联网安装环境或管理员权限。
 4. 粘贴链接并等待分集预览，选择保存位置和需要的分集，然后点击“开始下载”。只有组件被删除或损坏时，界面才会显示“修复组件”。
@@ -13,13 +15,15 @@
 
 ## 开发构建
 
-在 macOS 或 Windows 安装 Node.js 20+ 与 pnpm，然后从仓库根目录运行：
+开发环境使用 Node.js 24 与 pnpm 11；以下脚本在 macOS / zsh 构建环境中从仓库根目录运行：
 
 ```bash
 ./scripts/build-windows.sh
 ```
 
-构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.6.zip`。
+构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.8.zip`。
+
+更新文件回归测试可在 Windows 或 macOS 执行 `node scripts/test-electron-update.mjs`。该命令使用项目锁定的 Electron 版本，必要时调用其安装脚本准备运行时；已有运行时可通过 `BILIFETCH_ELECTRON_BIN` 指定。`scripts/test-all-platforms.sh` 已包含这项检查。
 
 ## 在线升级发布
 
@@ -33,6 +37,8 @@ Windows 1.1.5 起，点击“退出并升级”后会立即锁定安装操作、
 
 Windows 1.1.6 起，更新窗口会根据当前版本显示所有尚未安装版本的说明，并按版本从旧到新排列。发布清单自动继承历史，旧客户端仍可读取累计说明。
 
+Windows 1.1.7 修复更新下载完成后的解压、校验和增量准备问题。若旧版在这个阶段报错，请先退出旧版，将 1.1.7 完整包解压到新的可写文件夹并运行一次，沿用已有设置和任务；修复代码需要这次手动过渡才能生效。
+
 Windows 1.1.0 与 macOS 1.5.7 起共用一个长期不变、可公开访问的 HTTPS 清单地址：
 
 ```text
@@ -45,10 +51,10 @@ https://github.com/你的用户名/BiliFetch/releases/latest/download/update.jso
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.1.6.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.6.zip \
-  --macos dist/BiliFetch-macOS-1.5.13.zip \
-  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.13.zip \
+  --windows dist/BiliFetch-Windows-x64-1.1.8.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.8.zip \
+  --macos dist/BiliFetch-macOS-1.5.14.zip \
+  --macos-url https://你的下载地址/BiliFetch-macOS-1.5.14.zip \
   --notes release-notes.txt \
   --history Updates/release-history.json \
   --previous-manifest previous/update.json \

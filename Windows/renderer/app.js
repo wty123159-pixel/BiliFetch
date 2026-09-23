@@ -198,7 +198,7 @@ async function resolveLink() {
     return;
   }
   const url = $('#sourceURL').value.trim();
-  if (!url) { setNotice('请先粘贴 B 站链接。', 'error'); return; }
+  if (!url) { setNotice('请粘贴 B 站链接、抖音链接或整段分享文字。', 'error'); return; }
   const requestID = `resolve-${++state.resolveGeneration}`;
   state.activeResolveID = requestID;
   state.resolving = true;
@@ -208,7 +208,7 @@ async function resolveLink() {
   renderPreview();
   $('#resolveButton').disabled = true;
   $('#resolveButton').textContent = '正在解析…';
-  setNotice('正在获取合集信息，请稍候…');
+  setNotice('正在读取视频信息，请稍候…');
   try {
     state.settings = readSettings();
     const preview = await window.biliFetch.resolve({ url, settings: state.settings, requestID });
@@ -332,7 +332,7 @@ async function downloadUpdate() {
   } catch (error) {
     $('#downloadUpdateButton').disabled = false;
     $('#laterUpdateButton').disabled = false;
-    $('#updateStatus').textContent = `更新下载失败：${error.message}`;
+    $('#updateStatus').textContent = `更新准备失败：${error.message}`;
   }
 }
 

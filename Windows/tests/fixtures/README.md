@@ -1,0 +1,1 @@
+这些是无账号数据、不可运行的微型测试样本。app-1.0.0.asar / app-1.0.1.asar 由项目锁定的 @electron/asar 生成，内含版本 JSON 和一个用于防止虚拟目录误识别的文本 BiliFetch.exe。full-update.zip 包含测试用 MZ 文本和新版 ASAR；另外三个 ZIP 分别包含越界路径、符号链接和重复文件，用于保留解压防护。所有 fixtures 随 tests 一起从正式应用包排除。

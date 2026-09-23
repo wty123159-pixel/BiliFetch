@@ -22,7 +22,7 @@ final class BilibiliThumbnailLoader: ObservableObject {
             return
         }
 
-        guard Self.isAllowed(url) else {
+        guard let referer = ThumbnailRequestPolicy.referer(for: url) else {
             isLoading = false
             return
         }
@@ -30,7 +30,7 @@ final class BilibiliThumbnailLoader: ObservableObject {
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         request.cachePolicy = .returnCacheDataElseLoad
-        request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
+        request.setValue(referer, forHTTPHeaderField: "Referer")
         request.setValue(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15",
             forHTTPHeaderField: "User-Agent"
@@ -51,8 +51,4 @@ final class BilibiliThumbnailLoader: ObservableObject {
         task?.resume()
     }
 
-    private static func isAllowed(_ url: URL) -> Bool {
-        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
-        return ["hdslb.com", "bilibili.com", "biliimg.com"].contains { host == $0 || host.hasSuffix(".\($0)") }
-    }
 }

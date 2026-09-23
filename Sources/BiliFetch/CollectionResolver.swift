@@ -120,7 +120,7 @@ final class CollectionResolver {
     ) throws {
         outputLines = []
         diagnosticLines = []
-        onStatus("正在通过 yt-dlp 读取合集信息…")
+        onStatus(URLClassifier.isDouyin(sourceURL) ? "正在读取抖音作品…" : "正在通过 yt-dlp 读取合集信息…")
 
         var arguments = [
             "--ignore-config",
@@ -131,15 +131,17 @@ final class CollectionResolver {
             // codecs differ from neighboring episodes. Each entry is resolved
             // again immediately before its own download.
             "--ignore-no-formats-error",
-            "--yes-playlist",
+            URLClassifier.isBilibili(sourceURL) ? "--yes-playlist" : "--no-playlist",
             "--no-warnings",
             "--print", "%(.{id,title,webpage_url,original_url,url,thumbnail,duration,playlist,playlist_title,playlist_index,playlist_count})j"
         ]
-        if let cookieFileURL {
-            arguments += ["--cookies", cookieFileURL.path]
-        } else if cookies != .none {
-            arguments += ["--cookies-from-browser", cookies.rawValue]
+        arguments += DownloadArgumentBuilder.cookieArguments(for: sourceURL, cookieFileURL: cookieFileURL, cookies: cookies)
+        let pluginArguments = DownloadArgumentBuilder.pluginArguments(for: sourceURL)
+        if URLClassifier.isDouyin(sourceURL), pluginArguments.isEmpty {
+            throw NSError(domain: "BiliFetch.CollectionResolver", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "抖音解析组件缺失，请重新安装完整版本。"])
         }
+        arguments += pluginArguments
         arguments += ["--", sourceURL.absoluteString]
 
         try runner.start(
@@ -170,7 +172,7 @@ final class CollectionResolver {
                     let error = NSError(
                         domain: "BiliFetch.CollectionResolver",
                         code: Int(exitCode),
-                        userInfo: [NSLocalizedDescriptionKey: self.friendlyError(from: diagnostics)]
+                        userInfo: [NSLocalizedDescriptionKey: self.friendlyError(from: diagnostics, sourceURL: sourceURL)]
                     )
                     completion(.failure(error), diagnostics)
                     return
@@ -204,7 +206,10 @@ final class CollectionResolver {
         runner.cancel()
     }
 
-    private func friendlyError(from log: String) -> String {
+    private func friendlyError(from log: String, sourceURL: URL) -> String {
+        if URLClassifier.isDouyin(sourceURL) {
+            return DouyinErrorMessage.from(log)
+        }
         let lower = log.lowercased()
         if lower.contains("412") || lower.contains("-352") {
             return "B站暂时拒绝了合集请求，请稍后重试或选择已登录的浏览器。"

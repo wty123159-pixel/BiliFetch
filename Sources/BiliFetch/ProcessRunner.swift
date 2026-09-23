@@ -172,19 +172,22 @@ final class ProcessRunner {
     }
 
     private func finish(_ context: RunContext) {
-        var remainingOutput: [String] = []
-        var remainingError: [String] = []
-        var code: Int32 = -1
-
-        context.lock.withLock {
-            guard !context.finished else { return }
+        let completion: (Int32, [String], [String])? = context.lock.withLock {
+            guard !context.finished else { return nil }
             context.finished = true
-            code = context.exitCode ?? -1
-            if !context.outputBuffer.isEmpty { remainingOutput = [context.outputBuffer] }
-            if !context.errorBuffer.isEmpty { remainingError = [context.errorBuffer] }
+            let result = (
+                context.exitCode ?? -1,
+                context.outputBuffer.isEmpty ? [] : [context.outputBuffer],
+                context.errorBuffer.isEmpty ? [] : [context.errorBuffer]
+            )
             context.outputBuffer = ""
             context.errorBuffer = ""
+            return result
         }
+        // EOF and process termination can race. Losing the lock must return
+        // from finish itself, not just from the withLock closure, or it can
+        // steal the real completion handler and deliver a spurious -1 code.
+        guard let (code, remainingOutput, remainingError) = completion else { return }
 
         context.outputPipe.fileHandleForReading.readabilityHandler = nil
         context.errorPipe.fileHandleForReading.readabilityHandler = nil

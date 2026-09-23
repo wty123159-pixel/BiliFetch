@@ -50,6 +50,7 @@ done
 PACKAGED_TOOLS_DIR="$BUILD_DIR/BiliFetch-win32-x64/resources/tools"
 mkdir -p "$PACKAGED_TOOLS_DIR"
 cp "$BUNDLED_TOOLS_DIR"/* "$PACKAGED_TOOLS_DIR/"
+cp -R "$PROJECT_DIR/Shared/yt-dlp-plugins" "$BUILD_DIR/BiliFetch-win32-x64/resources/yt-dlp-plugins"
 
 for tool_name in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe; do
   if [[ ! -s "$PACKAGED_TOOLS_DIR/$tool_name" ]]; then

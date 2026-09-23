@@ -24,6 +24,32 @@ check(
     "rejects lookalike hosts"
 )
 
+let shareFixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("Fixtures/share-links.json")
+let shareFixtures = try JSONSerialization.jsonObject(with: Data(contentsOf: shareFixtureURL)) as! [[String: Any]]
+for fixture in shareFixtures {
+    let actual = URLClassifier.validatedURL(from: fixture["input"] as! String)?.absoluteString
+    check(actual == fixture["expected"] as? String, "shared link fixture: \(fixture["name"]!)")
+}
+let thumbnailFixtures = try JSONSerialization.jsonObject(with: Data(contentsOf: shareFixtureURL.deletingLastPathComponent().appendingPathComponent("thumbnail-hosts.json"))) as! [[String: Any]]
+for fixture in thumbnailFixtures {
+    let actual = ThumbnailRequestPolicy.referer(for: URL(string: fixture["url"] as! String)!)
+    check(actual == fixture["referer"] as? String, "shared thumbnail fixture: \(fixture["name"]!)")
+}
+let douyinURL = URL(string: "https://www.douyin.com/video/7688293605819075875?p=2&season_id=1")!
+check(!DownloadScope.collection.downloadsPlaylist(for: douyinURL), "Douyin work never expands as a Bilibili collection")
+check(!URLClassifier.looksLikeCollection(douyinURL), "Douyin query values do not trigger Bilibili playlist detection")
+check(URLClassifier.bvid(from: URL(string: "https://v.douyin.com/BVnotbilibili/")!) == nil, "Douyin short codes never invoke Bilibili API")
+check(DownloadArgumentBuilder.cookieArguments(for: douyinURL, cookieFileURL: URL(fileURLWithPath: "/tmp/bilibili.txt"), cookies: .chrome).isEmpty, "Douyin does not read browser credentials even when selected for Bilibili")
+check(DownloadArgumentBuilder.cookieArguments(for: douyinURL, cookieFileURL: URL(fileURLWithPath: "/tmp/bilibili.txt"), cookies: .none).isEmpty, "Douyin never automatically reads a browser or Bilibili cookie file")
+check(DownloadArgumentBuilder.pluginArguments(for: douyinURL).contains("--plugin-dirs"), "loads shipped Douyin parser")
+check(DouyinErrorMessage.from("ERROR: BILIFETCH_DOUYIN: 请重新分享\ninternal detail") == "请重新分享", "shows actionable Douyin error")
+let douyinPreview = try CollectionMetadataParser.parse(lines: [
+    #"{"id":"7688293605819075875","title":"测试作品","webpage_url":"https://www.douyin.com/video/7688293605819075875","duration":12,"thumbnail":"https://p3.douyinpic.com/test.jpg"}"#
+], sourceURL: URL(string: "https://v.douyin.com/V3t4RyEfLUo/")!)
+check(douyinPreview.items.count == 1 && douyinPreview.items[0].isSelected, "Douyin preview supports the existing selection workflow")
+check(douyinPreview.items[0].url.absoluteString == "https://www.douyin.com/video/7688293605819075875", "Douyin preview keeps the canonical work URL for retries")
+
 let videoURL = URL(string: "https://www.bilibili.com/video/BV123")!
 let collectionURL = URL(string: "https://space.bilibili.com/12/lists/34?type=season")!
 let collectionContextVideoURL = URL(
@@ -382,7 +408,7 @@ let concurrentGroup = DispatchGroup()
 var concurrentCodes: [Int32] = []
 let concurrentLock = NSLock()
 var concurrentRunners: [ProcessRunner] = []
-for _ in 1...5 {
+for _ in 1...20 {
     let concurrentRunner = ProcessRunner(callbackQueue: concurrentQueue)
     concurrentRunners.append(concurrentRunner)
     concurrentGroup.enter()
@@ -402,8 +428,8 @@ for _ in 1...5 {
         concurrentGroup.leave()
     }
 }
-check(concurrentGroup.wait(timeout: .now() + 5) == .success, "runs five download processes concurrently")
-check(concurrentCodes.count == 5 && concurrentCodes.allSatisfy { $0 == 0 }, "finishes all concurrent processes independently")
+check(concurrentGroup.wait(timeout: .now() + 5) == .success, "runs twenty short processes concurrently to exercise EOF/exit races")
+check(concurrentCodes.count == 20 && concurrentCodes.allSatisfy { $0 == 0 }, "finishes every concurrent process exactly once with its actual exit code: \(concurrentCodes)")
 
 if failures > 0 {
     print("\n\(failures) self-test(s) failed")

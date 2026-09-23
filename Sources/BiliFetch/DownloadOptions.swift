@@ -16,6 +16,7 @@ enum DownloadScope: String, CaseIterable, Identifiable {
     }
 
     func downloadsPlaylist(for url: URL) -> Bool {
+        guard URLClassifier.isBilibili(url) else { return false }
         switch self {
         case .current:
             return false
@@ -116,26 +117,52 @@ enum DownloadEngine: String, CaseIterable, Identifiable {
 
 enum URLClassifier {
     static func validatedURL(from text: String) -> URL? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard var components = URLComponents(string: trimmed),
+        // The same URL can appear twice in Markdown link text. Multiple
+        // different links are ambiguous and must not silently choose a work.
+        let pattern = #"(?<![A-Za-z0-9_:/@?=&%.-])https?://[^\s<>\"'`\[\](){}，。！？；、【】「」《》（）…]+"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        var urls: [URL] = []
+        for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text),
+                  let url = validatedSingleURL(String(text[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;!"))) else { continue }
+            if !urls.contains(url) { urls.append(url) }
+        }
+        return urls.count == 1 ? urls[0] : nil
+    }
+
+    private static func validatedSingleURL(_ text: String) -> URL? {
+        guard var components = URLComponents(string: text),
               let scheme = components.scheme?.lowercased(),
               scheme == "https" || scheme == "http",
+              components.user == nil, components.password == nil,
+              components.port == nil || components.port == (scheme == "https" ? 443 : 80),
               let host = components.host?.lowercased(),
               isAllowed(host: host) else {
             return nil
         }
 
+        components.scheme = scheme
+        components.host = host
+        components.port = nil
+        if components.path.isEmpty { components.path = "/" }
         components.fragment = nil
         return components.url
     }
 
     static func isAllowed(host: String) -> Bool {
-        host == "bilibili.com" ||
-        host.hasSuffix(".bilibili.com") ||
-        host == "b23.tv" ||
-        host.hasSuffix(".b23.tv") ||
-        host == "bilibili.tv" ||
-        host.hasSuffix(".bilibili.tv")
+        ["bilibili.com", "b23.tv", "bilibili.tv", "douyin.com", "iesdouyin.com"].contains {
+            host == $0 || host.hasSuffix("." + $0)
+        }
+    }
+
+    static func isBilibili(_ url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        return ["bilibili.com", "b23.tv", "bilibili.tv"].contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
+    static func isDouyin(_ url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        return ["douyin.com", "iesdouyin.com"].contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     static func looksLikeCollection(_ url: URL) -> Bool {
@@ -143,13 +170,14 @@ enum URLClassifier {
     }
 
     static func isMultiPartVideoURL(_ url: URL) -> Bool {
-        url.path.lowercased().contains("/video/") &&
+        isBilibili(url) && url.path.lowercased().contains("/video/") &&
         URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
             .contains(where: { $0.name.lowercased() == "p" }) == true
     }
 
     static func hasOuterCollectionContext(_ url: URL) -> Bool {
+        guard isBilibili(url) else { return false }
         let value = url.absoluteString.lowercased()
         let collectionMarkers = [
             "/list/",
@@ -200,6 +228,7 @@ enum URLClassifier {
     }
 
     static func bvid(from url: URL) -> String? {
+        guard isBilibili(url) else { return nil }
         guard let expression = try? NSRegularExpression(
             pattern: #"BV[0-9A-Za-z]+"#,
             options: [.caseInsensitive]
@@ -212,6 +241,29 @@ enum URLClassifier {
             return nil
         }
         return String(url.path[range])
+    }
+}
+
+enum ThumbnailRequestPolicy {
+    static func referer(for url: URL) -> String? {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return nil }
+        if ["hdslb.com", "bilibili.com", "biliimg.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+            return "https://www.bilibili.com/"
+        }
+        if ["douyinpic.com", "douyincdn.com", "byteimg.com", "pstatp.com", "ibytedtos.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+            return "https://www.douyin.com/"
+        }
+        return nil
+    }
+}
+
+enum DouyinErrorMessage {
+    static func from(_ log: String) -> String {
+        if let range = log.range(of: "BILIFETCH_DOUYIN:") {
+            return String(log[range.upperBound...].split(separator: "\n").first ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return "暂时无法免登录读取这条抖音作品。请稍后重试或重新复制作品分享链接；私密、已删除或受限作品可能无法下载。"
     }
 }
 
@@ -320,6 +372,26 @@ enum FilenameSanitizer {
 }
 
 enum DownloadArgumentBuilder {
+    static func cookieArguments(for url: URL, cookieFileURL: URL?, cookies: BrowserCookies) -> [String] {
+        guard URLClassifier.isBilibili(url) else { return [] }
+        if URLClassifier.isBilibili(url), let cookieFileURL {
+            return ["--cookies", cookieFileURL.path]
+        }
+        return cookies == .none ? [] : ["--cookies-from-browser", cookies.rawValue]
+    }
+
+    static func pluginArguments(for url: URL) -> [String] {
+        guard URLClassifier.isDouyin(url) else { return [] }
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Shared/yt-dlp-plugins", isDirectory: true)
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("yt-dlp-plugins", isDirectory: true)
+        let directory = [bundled, source].compactMap { $0 }.first {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("bilifetch/yt_dlp_plugins/extractor/douyin_share.py").path)
+        }
+        return directory.map { ["--no-plugin-dirs", "--plugin-dirs", $0.path, "--socket-timeout", "15", "--extractor-retries", "1"] } ?? []
+    }
+
     static func arguments(
         for request: DownloadRequest,
         ffmpegPath: String?,
@@ -377,11 +449,8 @@ enum DownloadArgumentBuilder {
 
         arguments.append(request.scope.downloadsPlaylist(for: request.url) ? "--yes-playlist" : "--no-playlist")
 
-        if let cookieFileURL = request.cookieFileURL {
-            arguments += ["--cookies", cookieFileURL.path]
-        } else if request.cookies != .none {
-            arguments += ["--cookies-from-browser", request.cookies.rawValue]
-        }
+        arguments += cookieArguments(for: request.url, cookieFileURL: request.cookieFileURL, cookies: request.cookies)
+        arguments += pluginArguments(for: request.url)
 
         if request.includeSubtitles {
             arguments += ["--write-subs", "--write-auto-subs", "--sub-langs", "zh.*,danmaku"]

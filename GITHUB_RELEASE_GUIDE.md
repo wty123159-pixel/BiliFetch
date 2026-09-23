@@ -36,8 +36,8 @@ Actions 会把真实仓库地址直接写进 macOS 与 Windows 安装包。更�
 
 ## 以后发布新版
 
-1. 修改 Windows 的 `Windows/package.json` 版本号。
-2. 修改 macOS 的 `scripts/build-app.sh` 中 `APP_VERSION` 与 `APP_BUILD`。
+1. Windows 有改动时，修改 `Windows/package.json` 的软件版本号。
+2. macOS 有改动时，修改 `scripts/build-app.sh` 中 `APP_VERSION` 与 `APP_BUILD`；未改动的平台保留原软件版本。Release Tag 与软件版本分别管理。
 3. 把本次改动同时检查两个平台，更新发布说明。
 4. 提交并推送：
 
