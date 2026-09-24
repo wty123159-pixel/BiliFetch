@@ -42,6 +42,8 @@ CAPTURE_GO_BIN="${GO_BIN:-$PROJECT_DIR/.build/toolchains/go/bin/go}"
 if [[ ! -x "$CAPTURE_GO_BIN" ]]; then CAPTURE_GO_BIN="$(command -v go)"; fi
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 "$CAPTURE_GO_BIN" build -trimpath -ldflags="-s -w -H=windowsgui" \
   -o "$PROJECT_DIR/build/wechat-capture/legacy-launcher.exe" "$PROJECT_DIR/Shared/WindowsLauncher/main.go"
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 "$CAPTURE_GO_BIN" build -trimpath -ldflags="-s -w -H=windowsgui" \
+  -o "$PROJECT_DIR/build/wechat-capture/bilifetch-updater.exe" "$PROJECT_DIR/Shared/WindowsUpdater/main.go"
 "$NODE_BIN" "$PROJECT_DIR/scripts/brand-windows-package.mjs"
 
 LOCALES_DIR="$BUILD_DIR/BiliFetch-win32-x64/locales"
@@ -57,9 +59,10 @@ PACKAGED_TOOLS_DIR="$BUILD_DIR/BiliFetch-win32-x64/resources/tools"
 mkdir -p "$PACKAGED_TOOLS_DIR"
 cp "$BUNDLED_TOOLS_DIR"/* "$PACKAGED_TOOLS_DIR/"
 cp "$PROJECT_DIR/build/wechat-capture/bilifetch-capture.exe" "$PACKAGED_TOOLS_DIR/"
+cp "$PROJECT_DIR/build/wechat-capture/bilifetch-updater.exe" "$PACKAGED_TOOLS_DIR/"
 cp -R "$PROJECT_DIR/Shared/yt-dlp-plugins" "$BUILD_DIR/BiliFetch-win32-x64/resources/yt-dlp-plugins"
 
-for tool_name in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe bilifetch-capture.exe; do
+for tool_name in yt-dlp.exe ffmpeg.exe ffprobe.exe aria2c.exe bilifetch-capture.exe bilifetch-updater.exe; do
   if [[ ! -s "$PACKAGED_TOOLS_DIR/$tool_name" ]]; then
     echo "Windows 发布包缺少内置组件：$tool_name"
     exit 1

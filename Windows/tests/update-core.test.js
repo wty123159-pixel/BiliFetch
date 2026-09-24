@@ -101,6 +101,8 @@ test('creates a single-instance Windows update helper with rollback', () => {
   assert.match(script, /LockDirectory/);
   assert.match(script, /\$HadBackup/);
   assert.match(script, /finally/);
-  assert.match(script, /Wait-Process/);
-  assert.equal((script.match(/Move-Item -LiteralPath \$Target -Destination \$Backup/g) || []).length, 1);
+  assert.match(script, /WaitForExit/);
+  assert.match(script, /\[IO.Directory\]::Move/);
+  assert.match(script, /\[IO.File\]::Copy/);
+  assert.doesNotMatch(script, /Copy-Item -Path/);
 });

@@ -167,40 +167,7 @@ function validateDeltaPlan(payload, currentVersion, targetVersion) {
 }
 
 function createWindowsInstallScript() {
-  return [
-    'param([string]$Source, [string]$Target, [string]$Executable, [int]$ProcessId, [string]$LogFile, [string]$LockDirectory)',
-    "$ErrorActionPreference = 'Stop'",
-    '$Backup = "$Target.update-backup"',
-    '$HadBackup = $false',
-    '$HasLock = $false',
-    'try {',
-    '  New-Item -ItemType Directory -Path $LockDirectory -ErrorAction Stop | Out-Null',
-    '  $HasLock = $true',
-    '  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue',
-    '  Start-Sleep -Milliseconds 1200',
-    '  if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Recurse -Force }',
-    '  if (Test-Path -LiteralPath $Target) {',
-    '    Move-Item -LiteralPath $Target -Destination $Backup',
-    '    $HadBackup = $true',
-    '  }',
-    '  New-Item -ItemType Directory -Path $Target -Force | Out-Null',
-    "  Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force",
-    '  Start-Process -FilePath (Join-Path $Target $Executable)',
-    '  Start-Sleep -Milliseconds 800',
-    '  Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue',
-    "  'Update installed successfully.' | Out-File -LiteralPath $LogFile -Encoding utf8",
-    '} catch {',
-    '  $_ | Out-File -LiteralPath $LogFile -Encoding utf8',
-    '  if ($HadBackup -and (Test-Path -LiteralPath $Backup)) {',
-    '    Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue',
-    '    Move-Item -LiteralPath $Backup -Destination $Target -Force',
-    '    Start-Process -FilePath (Join-Path $Target $Executable)',
-    '  }',
-    '} finally {',
-    '  if ($HasLock) { Remove-Item -LiteralPath $LockDirectory -Recurse -Force -ErrorAction SilentlyContinue }',
-    '  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue',
-    '}'
-  ].join('\r\n');
+  return require('node:fs').readFileSync(require('node:path').join(__dirname, 'update-install.ps1'), 'utf8');
 }
 
 module.exports = {

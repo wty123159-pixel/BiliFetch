@@ -26,7 +26,7 @@ if (!executable) {
     executable = require('electron');
   }
 }
-await run(executable, ['--test', path.join(root, 'Windows/tests/update-files.test.js'), path.join(root,'Windows/tests/wechat-capture.test.js')], {
+await run(executable, ['--test', path.join(root, 'Windows/tests/update-files.test.js'), path.join(root,'Windows/tests/wechat-capture.test.js'), path.join(root, 'Windows/tests/update-installer.test.js')], {
   ...process.env,
   ELECTRON_RUN_AS_NODE: '1',
   BILIFETCH_ELECTRON_TEST_VERSION: require('electron/package.json').version,

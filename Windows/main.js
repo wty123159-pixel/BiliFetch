@@ -17,6 +17,7 @@ const core = require('./core');
 const updateCore = require('./update-core');
 const { UpdateNetwork } = require('./update-network');
 const updateFiles = require('./update-files');
+const { startWindowsInstall, acknowledgeWindowsInstall } = require('./update-installer');
 const { WeChatCapture } = require('./wechat-capture');
 const { showStartupNotice } = require('./startup-notice');
 const updateIO = updateFiles.fs.promises;
@@ -904,21 +905,13 @@ class AppUpdater {
     await updateIO.access(target, fs.constants.W_OK);
     this.installing = true;
     try {
-      const helper = userDataPath('Updates', `install-${Date.now()}.ps1`);
-      const logFile = userDataPath('Updates', 'update-install.log');
-      const lockDirectory = userDataPath('Updates', 'install-update.lock');
-      const script = updateCore.createWindowsInstallScript();
-      await updateIO.writeFile(helper, script, 'utf8');
-      const child = spawn('powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper,
-        '-Source', this.stagedRoot,
-        '-Target', target,
-        '-Executable', path.basename(process.execPath),
-        '-ProcessId', String(process.pid),
-        '-LogFile', logFile,
-        '-LockDirectory', lockDirectory
-      ], { detached: true, windowsHide: true, stdio: 'ignore', cwd: app.getPath('temp') });
-      child.unref();
+      await startWindowsInstall({
+        source: this.stagedRoot, target,
+        executable: await updateIO.access(path.join(this.stagedRoot, '记住你宇哥.exe')).then(() => '记住你宇哥.exe', () => path.basename(process.execPath)),
+        processId: process.pid, version: this.available.version,
+        bootstrapper: path.join(process.resourcesPath, 'tools', 'bilifetch-updater.exe'),
+        updatesDirectory: userDataPath('Updates')
+      });
       setTimeout(() => app.quit(), 150);
       // If a window or lifecycle hook unexpectedly vetoes the graceful quit,
       // force the old executable to exit so the detached installer can proceed.
@@ -1041,6 +1034,9 @@ function registerIPC() {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.bilifetch.windows');
+  if (process.platform === 'win32' && app.isPackaged) {
+    await acknowledgeWindowsInstall({ argv: process.argv, version: APP_VERSION, executable: process.execPath, updatesDirectory: userDataPath('Updates') });
+  }
   weChatCapture = new WeChatCapture(
     app.isPackaged ? path.join(process.resourcesPath, 'tools', 'bilifetch-capture.exe') :
       path.join(__dirname, '..', 'build', 'wechat-capture', process.platform === 'win32' ? 'bilifetch-capture.exe' : 'bilifetch-capture-macos'),

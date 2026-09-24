@@ -10,7 +10,7 @@
 
 ## 使用
 
-1. 解压整个 `BiliFetch-Windows-x64-1.1.11.zip`，不要只复制其中的启动文件。
+1. 解压整个 `BiliFetch-Windows-x64-1.1.12.zip`，不要只复制其中的启动文件。
 2. 双击 `记住你宇哥.exe`，阅读启动声明并手动点击“我已知晓”。每次启动均需确认，关闭声明或退出不会进入主界面。
 3. 软件会自动检测并调用包内的 yt-dlp、FFmpeg、FFprobe 和 aria2，不需要联网安装环境或管理员权限。
 4. 粘贴链接并等待分集预览，选择保存位置和需要的分集，然后点击“开始下载”。只有组件被删除或损坏时，界面才会显示“修复组件”。
@@ -25,11 +25,17 @@
 ./scripts/build-windows.sh
 ```
 
-构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.11.zip`。
+构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.12.zip`。
 
 FFmpeg 上游每日构建只保留最近 14 次。固定版本的原始压缩包已过期时，构建脚本会从 BiliFetch `v2026.09.07-3` 的 Windows 1.1.6 发布包恢复完全相同的 FFmpeg、FFprobe 和 7 个运行库，并验证固定的 SHA-256；不会恢复旧应用或替换其他下载组件。工作流已经下载的历史发布包可直接复用，否则自动下载并缓存。原始 FFmpeg 压缩包缓存若校验通过，也仍可使用。
 
 更新文件回归测试可在 Windows 或 macOS 执行 `node scripts/test-electron-update.mjs`。该命令使用项目锁定的 Electron 版本，必要时调用其安装脚本准备运行时；已有运行时可通过 `BILIFETCH_ELECTRON_BIN` 指定。`scripts/test-all-platforms.sh` 已包含这项检查。
+
+Windows 1.1.12 起，点击“退出并升级”会先在原目录旁准备并逐文件校验完整新版；准备成功才退出。安装器等待文件占用释放后原子替换目录，确认新程序在原位置以预期版本启动后才清理备份。失败保留原文件或回退，并显示失败提示。安装日志位于 `%APPDATA%\bilifetch-windows\Updates\update-install.log`，同目录的 `install-*.json` 和 `*.launcher.log` 保留阶段及启动错误。
+
+如果 1.1.10 / 1.1.11 点击升级后仍是旧版，请退出旧程序，将 1.1.12 完整 ZIP 解压到新的可写目录，运行其中的 `记住你宇哥.exe`，并将原快捷方式改到新目录；不要只替换 EXE。原有设置和任务保存在同一用户数据目录，可继续使用。旧版自带的安装脚本无法由尚未安装的新版本修正。
+
+原生安装回归可在 Windows 执行 `go build -o build/update-probe.exe Windows/tests/fixtures/update-probe/main.go`，再运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-installer.ps1 -Helper Windows/update-install.ps1 -Probe build/update-probe.exe`。测试仅使用临时目录，覆盖替换、重启、中文及方括号路径、临时与永久占用、启动失败回退、旧锁残留和并发安装锁；Release 工作流增加 Windows runner 门禁。
 
 ## 在线升级发布
 
@@ -57,8 +63,8 @@ https://github.com/你的用户名/BiliFetch/releases/latest/download/update.jso
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.1.11.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.11.zip \
+  --windows dist/BiliFetch-Windows-x64-1.1.12.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.12.zip \
   --macos dist/BiliFetch-macOS-1.5.16.zip \
   --macos-url https://你的下载地址/BiliFetch-macOS-1.5.16.zip \
   --notes release-notes.txt \
