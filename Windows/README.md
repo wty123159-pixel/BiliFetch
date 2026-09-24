@@ -1,6 +1,6 @@
 # 记住你宇哥 · Windows
 
-原名 BiliFetch。软件显示名和图标已更新；为兼容旧版在线更新，发布包名、内部启动文件和应用数据目录继续使用 BiliFetch 标识。无需迁移已有设置、登录状态或未完成任务。
+原名 BiliFetch。软件显示名和图标已更新；为兼容旧版在线更新，发布包名和应用数据目录继续使用 BiliFetch 标识；主程序文件已改为“记住你宇哥.exe”，BiliFetch.exe 仅作旧版更新与旧快捷方式的兼容入口。无需迁移已有设置、登录状态或未完成任务。
 
 1.1.9 增加视频号本机播放捕获（测试阶段）：从「视频号捕获」开启，在已登录的电脑微信播放目标作品，再勾选加入原有下载列表。已有 HTTP/HTTPS 代理会动态接续，不固定代理端口；关闭捕获恢复原设置。需要确认本机捕获证书及临时代理，PAC 自动代理和认证代理尚未支持。Windows 真机微信播放和下载尚待验证，详见 Shared/WeChatCapture/README.md。
 
@@ -10,8 +10,8 @@
 
 ## 使用
 
-1. 解压整个 `BiliFetch-Windows-x64-1.1.10.zip`，不要只复制其中的 `BiliFetch.exe`。
-2. 双击 `BiliFetch.exe`，阅读启动声明并手动点击“我已知晓”。每次启动均需确认，关闭声明或退出不会进入主界面。
+1. 解压整个 `BiliFetch-Windows-x64-1.1.11.zip`，不要只复制其中的启动文件。
+2. 双击 `记住你宇哥.exe`，阅读启动声明并手动点击“我已知晓”。每次启动均需确认，关闭声明或退出不会进入主界面。
 3. 软件会自动检测并调用包内的 yt-dlp、FFmpeg、FFprobe 和 aria2，不需要联网安装环境或管理员权限。
 4. 粘贴链接并等待分集预览，选择保存位置和需要的分集，然后点击“开始下载”。只有组件被删除或损坏时，界面才会显示“修复组件”。
 
@@ -25,7 +25,7 @@
 ./scripts/build-windows.sh
 ```
 
-构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.10.zip`。
+构建脚本会下载并校验固定版本的 Windows 组件，然后放入程序的 `resources/tools` 目录。为减小体积，FFmpeg 与 FFprobe 共用同一组动态运行库，Electron 仅保留简体中文、繁体中文和英文资源；这些调整不会减少下载、合并或音视频轨检查能力。重复构建会使用 `build/windows-tools-cache` 缓存。构建结果位于 `dist/BiliFetch-Windows-x64-1.1.11.zip`。
 
 FFmpeg 上游每日构建只保留最近 14 次。固定版本的原始压缩包已过期时，构建脚本会从 BiliFetch `v2026.09.07-3` 的 Windows 1.1.6 发布包恢复完全相同的 FFmpeg、FFprobe 和 7 个运行库，并验证固定的 SHA-256；不会恢复旧应用或替换其他下载组件。工作流已经下载的历史发布包可直接复用，否则自动下载并缓存。原始 FFmpeg 压缩包缓存若校验通过，也仍可使用。
 
@@ -57,8 +57,8 @@ https://github.com/你的用户名/BiliFetch/releases/latest/download/update.jso
 
 ```bash
 node scripts/create-release-manifest.mjs \
-  --windows dist/BiliFetch-Windows-x64-1.1.10.zip \
-  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.10.zip \
+  --windows dist/BiliFetch-Windows-x64-1.1.11.zip \
+  --windows-url https://你的下载地址/BiliFetch-Windows-x64-1.1.11.zip \
   --macos dist/BiliFetch-macOS-1.5.16.zip \
   --macos-url https://你的下载地址/BiliFetch-macOS-1.5.16.zip \
   --notes release-notes.txt \
@@ -79,3 +79,13 @@ node scripts/create-release-manifest.mjs \
 - Electron：MIT
 
 仅下载你有权保存的内容。本工具不绕过会员、付费、DRM、私密内容或平台访问控制。
+
+## 1.1.11 网络与窗口修复
+
+普通网络不需要第三方代理。视频号捕获读取 Windows 原生 WinINet 设置；无代理和默认“自动检测设置”可直接开启，临时代理使用系统分配的空闲端口，关闭或下次启动恢复原配置。已有 HTTP/HTTPS 手动代理动态接续。主动启用 PAC 脚本或账号密码代理仍需调整配置，软件会明确提示，不会静默改写。
+
+捕获对话框按可用窗口宽高排版，按钮换行、标题自动折行，作品列表独立滚动。更新主地址连接失败后，自动尝试 GitHub 官方 API 下载同一 Release 的同名文件，不使用公共中转服务或内置账号，校验完整包及增量包的 SHA-256。
+
+如果旧版已无法读取更新清单，需要手动换用本版一次。官方备用通道依然可能受所在网络限制，不保证覆盖所有大陆网络。旧的任务栏固定项可能保留图标缓存，可从新的“记住你宇哥.exe”重新固定；已有快捷方式仍可通过兼容入口启动。
+
+验证：Windows 11 ARM64 虚拟机运行 x64 成品相关测试，已验证原生代理读取与恢复；这不等同于 Windows x64 物理机微信真实播放和下载完成。完整记录见 `Updates/validation-2026-09-24.md`。

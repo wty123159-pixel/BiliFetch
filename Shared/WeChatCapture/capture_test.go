@@ -402,7 +402,10 @@ func TestYTDLPAria2ResumeIntegration(t *testing.T) {
 			if engine == "aria2" {
 				args = append(args, "--downloader", filepath.Join(root, "Vendor/Tools/aria2c"), "--downloader-args", "aria2c:--continue=true --all-proxy= --file-allocation=none")
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			// The bundled one-file yt-dlp needs about 24 seconds just to start on
+			// a cold macOS host; keep the integration deadline above cold startup
+			// plus media validation (it is not a product network timeout).
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			command := exec.CommandContext(ctx, filepath.Join(root, "Vendor/Tools/yt-dlp"), args...)
 			if output, e := command.CombinedOutput(); e != nil {

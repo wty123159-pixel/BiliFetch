@@ -1,6 +1,6 @@
 # 视频号本机播放捕获
 
-macOS SwiftUI 与 Windows Electron 共用独立 Go 组件。默认关闭；用户确认后，为当前用户信任本机生成的专用证书，并临时设置系统 HTTP/HTTPS 代理。开启时读取原代理，按原地址和端口接续转发；本机捕获端口自动分配。关闭捕获、正常退出和应用内升级前恢复原设置，异常中断后在下次启动恢复。自动代理、需要认证或多组冲突代理尚待适配，不强制关闭用户原代理。
+macOS SwiftUI 与 Windows Electron 共用独立 Go 组件。默认关闭；用户确认后，为当前用户信任本机生成的专用证书，并临时设置系统 HTTP/HTTPS 代理。开启时读取原代理，按原地址和端口接续转发；本机捕获端口自动分配。关闭捕获、正常退出和应用内升级前恢复原设置，异常中断后在下次启动恢复。主动 PAC 脚本、需要认证或多组冲突代理尚待适配；Windows 默认自动检测及无代理状态可直接启用，不强制关闭用户原代理。
 
 ## 只收录实际播放的作品
 
@@ -43,3 +43,9 @@ Go 1.27.1 或更新版本，零外部 Go 模块。GO_BIN 可指定编译器，�
 - https://github.com/ltaoo/wx_channels_download （播放器接口结构参考，未打包其源码或二进制）
 - https://burtleburtle.net/bob/c/isaac64.c （Bob Jenkins，Public Domain；独立 C 向量核对）
 - https://github.com/actions/setup-go （构建环境）
+
+### 2026-09-24 Windows 代理修复
+
+Windows 改为原生 WinINet `InternetQueryOptionW` / `InternetSetOptionW`，不再通过 PowerShell 合并输出解析代理 JSON。保存和恢复手动代理、绕过列表、PAC 地址和自动检测标志；默认自动检测只在捕获期间暂时关闭，停止时恢复。支持旧版恢复记录，包括干净系统没有注册表代理键时省略的空记录。现存代理端口动态读取，捕获使用空闲端口，不固定为 7897。
+
+已在 Windows 11 ARM64 虚拟机运行 x64 组件，实际验证原生读取、直连模式、自动检测、启用、停止和异常恢复记录；未在 Windows 微信账号完成播放捕获与下载验收。详细测试和成品哈希见 `Updates/validation-2026-09-24.md`。

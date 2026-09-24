@@ -29,6 +29,9 @@ private final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         guard !finished else { return }
         do {
+            guard let response = downloadTask.response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+                throw AppUpdateError.downloadFailed("更新服务器没有返回有效的下载文件。")
+            }
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: location, to: destination)
@@ -72,6 +75,7 @@ final class MacAppUpdater: ObservableObject {
     private var stagedAppURL: URL?
     private var attemptedFullFallback = false
     private let acceleratedDownloadRunner = ProcessRunner()
+    private lazy var updateNetwork = UpdateNetwork(userAgent: "BiliFetch-macOS/\(currentVersion)")
 
     var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
@@ -107,45 +111,27 @@ final class MacAppUpdater: ObservableObject {
     }
 
     private func requestManifest(from sources: [URL], index: Int, silent: Bool) {
-        let url = sources[index]
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 20
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.setValue("BiliFetch-macOS/\(currentVersion)", forHTTPHeaderField: "User-Agent")
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                do {
-                    if let error { throw AppUpdateError.downloadFailed(error.localizedDescription) }
-                    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let data else {
-                        throw AppUpdateError.downloadFailed("更新服务器没有返回有效数据。")
-                    }
-                    let manifest = try JSONDecoder().decode(AppUpdateManifest.self, from: data)
-                    let release = try manifest.macOSRelease(currentVersion: self.currentVersion)
-                    if try AppVersion.compare(release.version, self.currentVersion) == .orderedDescending {
-                        self.release = release
-                        self.phase = .available
-                        self.statusText = release.delta == nil
-                            ? "发现新版本 v\(release.version)"
-                            : "发现新版本 v\(release.version) · 可用小体积增量更新"
-                    } else {
-                        self.release = nil
-                        self.phase = .current
-                        self.statusText = "当前 v\(self.currentVersion) 已是最新版本。"
-                    }
-                } catch {
-                    let next = index + 1
-                    if next < sources.count {
-                        self.requestManifest(from: sources, index: next, silent: silent)
-                    } else if silent {
-                        self.phase = .idle
-                        self.statusText = ""
-                    } else {
-                        self.fail(error)
-                    }
+        Task {
+            do {
+                let release = try await updateNetwork.manifest(sources[index], currentVersion: currentVersion)
+                if try AppVersion.compare(release.version, currentVersion) == .orderedDescending {
+                    self.release = release
+                    phase = .available
+                    statusText = release.delta == nil
+                        ? "发现新版本 v\(release.version)"
+                        : "发现新版本 v\(release.version) · 可用小体积增量更新"
+                } else {
+                    self.release = nil
+                    phase = .current
+                    statusText = "当前 v\(currentVersion) 已是最新版本。"
                 }
+            } catch {
+                let next = index + 1
+                if next < sources.count { requestManifest(from: sources, index: next, silent: silent) }
+                else if silent { phase = .idle; statusText = "" }
+                else { fail(AppUpdateError.downloadFailed("暂时无法连接更新服务器，已尝试现有更新通道。请稍后重试，或手动下载完整安装包。")) }
             }
-        }.resume()
+        }
     }
 
     func download() {
@@ -173,71 +159,84 @@ final class MacAppUpdater: ObservableObject {
         phase = .downloading
         progress = 0
         statusText = asset.kind == .delta ? "正在启动增量更新下载…" : "正在启动完整更新下载…"
-        if startAcceleratedDownload(to: archive, release: release, asset: asset) { return }
-        startStandardDownload(to: archive, release: release, asset: asset)
-    }
-
-    private func startAcceleratedDownload(to archive: URL, release: AppUpdateRelease, asset: AppUpdateAsset) -> Bool {
-        guard let aria2 = BackendLocator.locateExecutable(named: "aria2c") else { return false }
-        let arguments = [
-            "--allow-overwrite=true", "--auto-file-renaming=false", "--continue=true",
-            "--file-allocation=none", "--max-connection-per-server=8", "--split=8",
-            "--min-split-size=1M", "--max-tries=3", "--retry-wait=2",
-            "--connect-timeout=20", "--timeout=30", "--summary-interval=1",
-            "--show-console-readout=true", "--console-log-level=warn", "--enable-color=false",
-            "--user-agent=BiliFetch-macOS/\(currentVersion)",
-            "--dir=\(archive.deletingLastPathComponent().path)", "--out=\(archive.lastPathComponent)",
-            "--", asset.url.absoluteString
-        ]
-        do {
-            try acceleratedDownloadRunner.start(
-                executable: aria2,
-                arguments: arguments,
-                onLine: { [weak self] line, _ in
-                    guard let self, let transfer = UpdateProgressParser.aria2(line) else { return }
-                    self.progress = transfer.fraction
-                    let label = asset.kind == .delta ? "正在下载增量更新" : "正在下载完整更新"
-                    self.statusText = transfer.speed.isEmpty ? "\(label)…" : "\(label) · \(transfer.speed)"
-                },
-                onFinish: { [weak self] exitCode in
-                    guard let self else { return }
-                    if exitCode == 0, FileManager.default.fileExists(atPath: archive.path) {
-                        self.verifyAndStage(archive, release: release, asset: asset)
-                    } else {
+        Task {
+            do {
+                let downloaded = try await updateNetwork.withFallback(asset.url) { source in
+                    try? FileManager.default.removeItem(at: archive)
+                    try? FileManager.default.removeItem(at: URL(fileURLWithPath: archive.path + ".aria2"))
+                    self.progress = 0
+                    self.statusText = source.officialAPI ? "正在使用官方备用通道下载更新…" : "正在下载更新…"
+                    if !source.officialAPI, let aria2 = BackendLocator.locateExecutable(named: "aria2c") {
+                        do { try await self.acceleratedDownload(source.url, executable: aria2, to: archive, asset: asset) }
+                        catch {
+                            try? FileManager.default.removeItem(at: archive)
+                            try? FileManager.default.removeItem(at: URL(fileURLWithPath: archive.path + ".aria2"))
+                            self.statusText = "多连接下载不可用，正在切换标准下载…"
+                            try await self.standardDownload(source, to: archive)
+                        }
+                    } else { try await self.standardDownload(source, to: archive) }
+                    // Validate each route before treating it as successful. Staging
+                    // rechecks this digest as well, and never bypasses validation.
+                    let digest = try SHA256.hash(data: Data(contentsOf: archive, options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
+                    guard digest == asset.sha256 else {
                         try? FileManager.default.removeItem(at: archive)
-                        try? FileManager.default.removeItem(at: URL(fileURLWithPath: archive.path + ".aria2"))
-                        self.statusText = "多连接下载不可用，正在切换标准下载…"
-                        self.startStandardDownload(to: archive, release: release, asset: asset)
+                        throw AppUpdateError.downloadFailed("更新包 SHA-256 校验失败，已删除可疑文件。")
                     }
+                    return archive
                 }
-            )
-            return true
-        } catch {
-            return false
+                verifyAndStage(downloaded, release: release, asset: asset)
+            } catch { handleAssetFailure(error, release: release, asset: asset) }
         }
     }
 
-    private func startStandardDownload(to archive: URL, release: AppUpdateRelease, asset: AppUpdateAsset) {
-        statusText = asset.kind == .delta ? "正在使用标准方式下载增量更新…" : "正在使用标准方式下载完整更新…"
-        let delegate = UpdateDownloadDelegate(
-            destination: archive,
-            progress: { [weak self] value in
-                DispatchQueue.main.async { self?.progress = value }
-            },
-            completion: { [weak self] result in
-                DispatchQueue.main.async {
-                    guard let self else { return }
+    private func acceleratedDownload(_ url: URL, executable: URL, to archive: URL, asset: AppUpdateAsset) async throws {
+        let arguments = [
+            "--allow-overwrite=true", "--auto-file-renaming=false", "--continue=true",
+            "--file-allocation=none", "--max-connection-per-server=8", "--split=8",
+            "--min-split-size=1M", "--max-tries=1", "--retry-wait=1",
+            "--connect-timeout=10", "--timeout=20", "--summary-interval=1",
+            "--show-console-readout=true", "--console-log-level=warn", "--enable-color=false",
+            "--user-agent=BiliFetch-macOS/\(currentVersion)",
+            "--dir=\(archive.deletingLastPathComponent().path)", "--out=\(archive.lastPathComponent)", "--", url.absoluteString
+        ]
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            do {
+                try acceleratedDownloadRunner.start(executable: executable, arguments: arguments,
+                    onLine: { [weak self] line, _ in
+                        guard let self, let transfer = UpdateProgressParser.aria2(line) else { return }
+                        self.progress = transfer.fraction
+                        let label = asset.kind == .delta ? "正在下载增量更新" : "正在下载完整更新"
+                        self.statusText = transfer.speed.isEmpty ? "\(label)…" : "\(label) · \(transfer.speed)"
+                    },
+                    onFinish: { exitCode in
+                        if exitCode == 0, FileManager.default.fileExists(atPath: archive.path) { continuation.resume() }
+                        else { continuation.resume(throwing: AppUpdateError.downloadFailed("多连接下载不可用。")) }
+                    })
+            } catch { continuation.resume(throwing: error) }
+        }
+    }
+
+    private func standardDownload(_ source: UpdateNetwork.Source, to archive: URL) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let delegate = UpdateDownloadDelegate(destination: archive,
+                progress: { [weak self] value in DispatchQueue.main.async { self?.progress = value } },
+                completion: { result in
                     switch result {
-                    case .success(let archive): self.verifyAndStage(archive, release: release, asset: asset)
-                    case .failure(let error): self.handleAssetFailure(error, release: release, asset: asset)
+                    case .success: continuation.resume()
+                    case .failure(let error): continuation.resume(throwing: error)
                     }
-                }
-            }
-        )
-        downloadDelegate = delegate
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-        downloadSession = session
-        session.downloadTask(with: asset.url).resume()
+                })
+            downloadDelegate = delegate
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 30
+            configuration.timeoutIntervalForResource = 3600
+            let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+            downloadSession?.finishTasksAndInvalidate()
+            downloadSession = session
+            var request = source.request(userAgent: "BiliFetch-macOS/\(currentVersion)", timeout: 30)
+            request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+            session.downloadTask(with: request).resume()
+        }
     }
 
     func install() {

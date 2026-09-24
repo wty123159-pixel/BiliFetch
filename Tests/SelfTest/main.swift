@@ -446,6 +446,21 @@ check(!weChatArguments.contains("--cookies") && !weChatArguments.contains("--coo
 check(weChatArguments.contains("--continue") && weChatArguments.contains("--part"), "WeChat downloads retain pause and resume arguments")
 check(ThumbnailRequestPolicy.referer(for: URL(string: "https://finder.video.qq.com/cover")!) == "https://channels.weixin.qq.com/", "WeChat thumbnails use platform referer")
 
+
+let officialManifestURL = URL(string: "https://github.com/owner/repo/releases/latest/download/update.json")!
+let githubAsset = GitHubReleaseAsset(officialManifestURL)!
+check(githubAsset.metadataURL.absoluteString == "https://api.github.com/repos/owner/repo/releases/latest", "official latest release API route")
+let taggedAsset = GitHubReleaseAsset(URL(string: "https://github.com/owner/repo/releases/download/v1%2Ftest/My%20App.zip")!)!
+check(taggedAsset.tag == "v1/test" && taggedAsset.name == "My App.zip", "official tagged API route preserves encoded names")
+for value in ["http://github.com/owner/repo/releases/latest/download/update.json", officialManifestURL.absoluteString + "?token=x", "https://github.com.evil.test/owner/repo/releases/latest/download/update.json", "https://user@github.com/owner/repo/releases/latest/download/update.json", "https://github.com/owner/repo/releases/latest/download/a%2Fb.zip"] {
+    check(GitHubReleaseAsset(URL(string: value)!) == nil, "API fallback rejects ambiguous source: \(value)")
+}
+let apiMetadata = #"{"tag_name":"v1","draft":false,"assets":[{"name":"update.json","state":"uploaded","id":123,"url":"https://api.github.com/repos/owner/repo/releases/assets/123"}]}"#
+check((try? githubAsset.apiURL(in: Data(apiMetadata.utf8)))?.absoluteString == githubAsset.assetPrefix + "123", "API download pins exact asset in the same repository")
+check((try? githubAsset.apiURL(in: Data(apiMetadata.replacingOccurrences(of: "owner/repo/releases/assets", with: "other/repo/releases/assets").utf8))) == nil, "API download rejects another repository")
+check((try? githubAsset.apiURL(in: Data(apiMetadata.replacingOccurrences(of: "\"draft\":false", with: "\"draft\":true").utf8))) == nil, "API download rejects unpublished draft")
+check((try? taggedAsset.apiURL(in: Data(apiMetadata.utf8))) == nil, "API download rejects mismatched tag")
+
 if failures > 0 {
     print("\n\(failures) self-test(s) failed")
     exit(1)

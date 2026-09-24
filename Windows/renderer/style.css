@@ -109,9 +109,19 @@ pre { max-height: 180px; overflow: auto; white-space: pre-wrap; color: #c8c0d0; 
 .update-progress { height: 8px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }.update-progress div { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pink), #b94bd6); transition: width .2s; }
 .update-dialog > p { color: var(--muted); }.dialog-actions { display: flex; justify-content: flex-end; gap: 9px; }
 @media (max-width: 1050px) { .status-pill { display: none; } .selection-actions { display: none; } .brand p { display: none; } }
-:root .capture-dialog { width: min(640px, 80vw); }
-.capture-list { min-height: 150px; max-height: 300px; overflow-y: auto; }
-.capture-row { display: flex; gap: 12px; align-items: center; padding: 12px 4px; border-bottom: 1px solid #ffffff18; }
+#captureDialog { width: min(720px, calc(100vw - 32px)); max-width: calc(100vw - 32px); overflow-x: hidden; }
+.capture-dialog { min-width: 0; max-height: calc(100vh - 42px); grid-template-rows: auto auto auto auto minmax(48px, 1fr) auto auto; }
+.capture-dialog > * { min-width: 0; overflow-wrap: anywhere; }
+.capture-dialog .dialog-title { gap: 12px; }
+.capture-dialog .icon-button { flex: 0 0 34px; }
+.capture-dialog .dialog-actions { flex-wrap: wrap; }
+.capture-list { min-height: 48px; height: 240px; max-height: 100%; overflow-y: auto; overflow-x: hidden; }
+@media (max-height: 600px), (max-width: 480px) {
+  .capture-dialog { padding: 14px; gap: 10px; }
+  .capture-dialog h2 { font-size: 20px; }
+  .capture-dialog .dialog-actions button { padding: 9px 12px; }
+}
+.capture-dialog .capture-row { display: flex; gap: 12px; align-items: center; padding: 12px 4px; border-bottom: 1px solid #ffffff18; }
 .capture-row input { width: 18px; flex: 0 0 18px; }
 .capture-row span { min-width: 0; overflow-wrap: anywhere; }
 .capture-row small { display: block; margin-top: 5px; color: #aaa; }

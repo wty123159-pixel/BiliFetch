@@ -59,6 +59,8 @@ Windows 的固定 FFmpeg 上游每日压缩包已过保留期。构建会校验�
 
 macOS 1.5.10 与 Windows 1.1.3 是首批能读取增量信息的客户端。因此旧版本第一次升级到它们仍会下载完整包；它们发布之后，再发布更高版本时才会开始明显减少更新下载量。每次 Release 都必须保留完整 ZIP，它既服务旧客户端，也是增量失败时的自动兜底。
 
+macOS 1.5.17、Windows 1.1.11 起，客户端会在 GitHub 主下载域名失败时，使用同一仓库的官方 Release API 查询同名资产，再以 `Accept: application/octet-stream` 下载。不需要内置令牌，仍验证清单提供的 SHA-256；这能覆盖部分域名连通性差异，不保证覆盖所有大陆网络。旧客户端未包含此逻辑，完全无法联网更新时必须先手动安装一次。
+
 如果主要用户无法稳定访问 GitHub，应把两个 ZIP 和 `update.json` 同步到国内对象存储或 CDN（例如阿里云 OSS、腾讯云 COS）。`Windows/update-channel.json` 支持 `manifestURLs` 数组，可以把国内清单放在第一位、GitHub 放在第二位，两个平台会依次尝试。只要清单中的安装包地址仍指向 GitHub，aria2 只能改善“可以访问但速度慢”的情况，不能解决网络完全不可达。
 
 不要删除或改名 `update.json`，也不要把测试版错误设置为 Latest；客户端始终通过 `releases/latest/download/update.json` 找最新版。

@@ -38,6 +38,11 @@ cd "$WINDOWS_DIR"
 "$PNPM_BIN" test
 export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
 "$PNPM_BIN" run package:win
+CAPTURE_GO_BIN="${GO_BIN:-$PROJECT_DIR/.build/toolchains/go/bin/go}"
+if [[ ! -x "$CAPTURE_GO_BIN" ]]; then CAPTURE_GO_BIN="$(command -v go)"; fi
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 "$CAPTURE_GO_BIN" build -trimpath -ldflags="-s -w -H=windowsgui" \
+  -o "$PROJECT_DIR/build/wechat-capture/legacy-launcher.exe" "$PROJECT_DIR/Shared/WindowsLauncher/main.go"
+"$NODE_BIN" "$PROJECT_DIR/scripts/brand-windows-package.mjs"
 
 LOCALES_DIR="$BUILD_DIR/BiliFetch-win32-x64/locales"
 for locale_file in "$LOCALES_DIR"/*.pak; do
@@ -94,7 +99,18 @@ cp "$PROJECT_DIR/Vendor/Tools/aria2-COPYING" "$BUILD_DIR/BiliFetch-win32-x64/Thi
 
 cd "$BUILD_DIR"
 find "$DIST_DIR" -maxdepth 1 -name "$ARCHIVE_NAME" -delete
-COPYFILE_DISABLE=1 zip -9qry "$DIST_DIR/$ARCHIVE_NAME" "BiliFetch-win32-x64"
+# Python marks non-ASCII entry names as UTF-8. This is required for the
+# Chinese executable name in both Windows Explorer and older ZIP updaters.
+python3 - "$BUILD_DIR" "$DIST_DIR/$ARCHIVE_NAME" <<'PYZIP'
+import pathlib, sys, zipfile
+base = pathlib.Path(sys.argv[1])
+with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    for file in sorted((base / 'BiliFetch-win32-x64').rglob('*')):
+        if file.is_symlink():
+            raise SystemExit(f'Windows package contains a symbolic link: {file}')
+        if file.is_file():
+            archive.write(file, file.relative_to(base))
+PYZIP
 shasum -a 256 "$DIST_DIR/$ARCHIVE_NAME"
 
 if [[ -n "${BILIFETCH_UPDATE_DOWNLOAD_URL:-}" ]]; then

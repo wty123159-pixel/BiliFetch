@@ -12,7 +12,15 @@ swiftc \
     "$PROJECT_DIR/Sources/BiliFetch/MacUpdateInstallScript.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/CollectionModels.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/AppUpdateModels.swift" \
+    "$PROJECT_DIR/Sources/BiliFetch/UpdateNetwork.swift" \
     "$PROJECT_DIR/Sources/BiliFetch/ProcessRunner.swift" \
     "$PROJECT_DIR/Tests/SelfTest/main.swift" \
     -o "$TEST_BINARY"
 "$TEST_BINARY"
+
+swiftc \
+    "$PROJECT_DIR/Sources/BiliFetch/AppUpdateModels.swift" \
+    "$PROJECT_DIR/Sources/BiliFetch/UpdateNetwork.swift" \
+    "$PROJECT_DIR/Tests/UpdateNetworkTests.swift" \
+    -o "$PROJECT_DIR/.build/update-network-tests"
+"$PROJECT_DIR/.build/update-network-tests"

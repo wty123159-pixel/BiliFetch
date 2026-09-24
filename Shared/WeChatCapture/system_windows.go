@@ -1,129 +1,122 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
-	"os"
-	"strconv"
-	"strings"
-	"unicode/utf16"
+	"fmt"
+	"runtime"
+	"syscall"
+	"unsafe"
 )
 
-func ps(script string) (string, error) {
-	words := utf16.Encode([]rune("$ErrorActionPreference='Stop';" + script))
-	data := make([]byte, len(words)*2)
-	for i, v := range words {
-		binary.LittleEndian.PutUint16(data[i*2:], v)
-	}
-	return commandRunner("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(data))
+var (
+	winInet             = syscall.NewLazyDLL("wininet.dll")
+	internetQueryOption = winInet.NewProc("InternetQueryOptionW")
+	internetSetOption   = winInet.NewProc("InternetSetOptionW")
+	globalFree          = syscall.NewLazyDLL("kernel32.dll").NewProc("GlobalFree")
+	nativeWindowsProxy  = windowsProxyBackend{read: readWindowsInternetSettings, write: writeWindowsInternetSettings}
+)
+
+// INTERNET_PER_CONN_OPTION contains an 8-byte union, aligned like uint64
+// (8 bytes on Win64, 4 bytes on Win32).
+type internetOption struct {
+	option uint32
+	value  uint64
+}
+type internetOptionList struct {
+	size        uint32
+	connection  *uint16 // NULL means the user's LAN/default Internet settings.
+	count       uint32
+	optionError uint32
+	options     *internetOption
 }
 
-const registryPath = `HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+func internetError(operation string, err error) error {
+	var code syscall.Errno
+	_ = errors.As(err, &code)
+	return fmt.Errorf("%s Windows 系统代理失败（WinINet，错误码 %d）", operation, code)
+}
 
-func registryState() (map[string]json.RawMessage, error) {
-	output, err := ps(`$p=Get-ItemProperty '` + registryPath + `';$r=@{};foreach($n in @('ProxyEnable','ProxyServer','ProxyOverride','AutoConfigURL','AutoDetect')){if($null -ne $p.$n){$r[$n]=$p.$n}};$r|ConvertTo-Json -Compress`)
-	if err != nil {
-		return nil, err
-	}
-	var values map[string]json.RawMessage
-	if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(output, "\ufeff"))), &values) != nil {
-		return nil, errors.New("无法读取系统代理设置")
-	}
-	return values, nil
-}
-func registryString(values map[string]json.RawMessage, key string) string {
-	var value string
-	_ = json.Unmarshal(values[key], &value)
-	return value
-}
-func registryNumber(values map[string]json.RawMessage, key string) int {
-	var value int
-	_ = json.Unmarshal(values[key], &value)
-	return value
-}
-func inspectSystemProxy() (*systemProxyState, error) {
-	values, err := registryState()
-	if err != nil {
-		return nil, err
-	}
-	if registryString(values, "AutoConfigURL") != "" || registryNumber(values, "AutoDetect") == 1 {
-		return nil, errors.New("当前使用自动代理，暂不支持接续；请在原代理软件切换到 HTTP/HTTPS 系统代理后重试，无需退出原代理软件")
-	}
-	state := &systemProxyState{Windows: values}
-	if registryNumber(values, "ProxyEnable") != 0 {
-		raw := registryString(values, "ProxyServer")
-		if strings.Contains(raw, "=") {
-			for _, pair := range strings.Split(raw, ";") {
-				parts := strings.SplitN(strings.TrimSpace(pair), "=", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				if parts[0] != "http" && parts[0] != "https" {
-					continue
-				}
-				address, e := proxyAddress(parts[1])
-				if e != nil {
-					return nil, e
-				}
-				if parts[0] == "http" {
-					state.UpstreamHTTP = address
-				} else {
-					state.UpstreamHTTPS = address
-				}
-			}
-			if state.UpstreamHTTP == "" && state.UpstreamHTTPS == "" {
-				return nil, errors.New("当前代理没有 HTTP/HTTPS 转发入口，原设置未修改")
-			}
-		} else {
-			address, e := proxyAddress(raw)
-			if e != nil {
-				return nil, e
-			}
-			state.UpstreamHTTP = address
-			state.UpstreamHTTPS = address
+func readWindowsInternetSettings() (windowsInternetSettings, error) {
+	// FLAGS_UI is preferred on Windows 8+; older systems may only support FLAGS.
+	for _, flagsOption := range []uint32{10, 1} {
+		settings, err := queryWindowsInternetSettings(flagsOption)
+		if err == nil {
+			return settings, nil
+		}
+		if flagsOption == 1 {
+			return settings, err
 		}
 	}
-	return state, nil
+	return windowsInternetSettings{}, errors.New("无法读取 Windows 系统代理")
 }
 
-const refreshInternet = `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class BiliFetchInternet{[DllImport("wininet.dll")]public static extern bool InternetSetOption(IntPtr h,int o,IntPtr b,int l);}';[void][BiliFetchInternet]::InternetSetOption([IntPtr]::Zero,39,[IntPtr]::Zero,0);[void][BiliFetchInternet]::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0);`
-
-func (s *systemProxyState) enable(directory string, port int) error {
-	s.Port = port
-	if err := writePrivateJSON(snapshotPath(directory), s); err != nil {
-		return errors.New("无法保存网络恢复记录，未启用捕获")
-	}
-	_, err := ps(`$p='` + registryPath + `';Set-ItemProperty $p ProxyServer '127.0.0.1:` + strconv.Itoa(port) + `';Set-ItemProperty $p ProxyOverride '<local>';Set-ItemProperty $p ProxyEnable 1;` + refreshInternet)
-	if err == nil {
-		current, readError := registryState()
-		if readError != nil || registryNumber(current, "ProxyEnable") != 1 || registryString(current, "ProxyServer") != "127.0.0.1:"+strconv.Itoa(port) {
-			err = errors.New("临时网络代理未生效，请检查系统权限后重试")
+func queryWindowsInternetSettings(flagsOption uint32) (windowsInternetSettings, error) {
+	options := []internetOption{{option: flagsOption}, {option: 2}, {option: 3}, {option: 4}}
+	list := internetOptionList{count: uint32(len(options)), options: &options[0]}
+	list.size = uint32(unsafe.Sizeof(list))
+	size := list.size
+	defer func() {
+		for _, option := range options[1:] {
+			if option.value != 0 {
+				_, _, _ = globalFree.Call(uintptr(option.value))
+			}
 		}
+	}()
+	ok, _, err := internetQueryOption.Call(0, 75, uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&size)))
+	runtime.KeepAlive(options)
+	if ok == 0 {
+		return windowsInternetSettings{}, internetError("读取", err)
 	}
-	if err != nil {
-		_ = s.restore(directory)
+	readString := func(ptr uintptr) string {
+		if ptr == 0 {
+			return ""
+		}
+		return syscall.UTF16ToString((*[1 << 20]uint16)(unsafe.Pointer(ptr))[:])
 	}
-	return err
+	return windowsInternetSettings{Flags: uint32(options[0].value), Server: readString(uintptr(options[1].value)), Bypass: readString(uintptr(options[2].value)), AutoConfigURL: readString(uintptr(options[3].value))}, nil
 }
-func (s *systemProxyState) restore(directory string) error {
-	current, err := registryState()
-	if err != nil {
-		return err
-	}
-	if registryString(current, "ProxyServer") == "127.0.0.1:"+strconv.Itoa(s.Port) {
-		data, _ := json.Marshal(s.Windows)
-		encoded := base64.StdEncoding.EncodeToString(data)
-		script := `$p='` + registryPath + `';$v=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('` + encoded + `'))|ConvertFrom-Json;foreach($n in @('ProxyServer','ProxyOverride','ProxyEnable')){if($null -ne $v.$n){Set-ItemProperty $p $n $v.$n}else{Remove-ItemProperty $p $n -ErrorAction SilentlyContinue}};` + refreshInternet
-		if _, err = ps(script); err != nil {
-			return err
+
+func writeWindowsInternetSettings(settings windowsInternetSettings) error {
+	texts := make([][]uint16, 3)
+	for i, text := range []string{settings.Server, settings.Bypass, settings.AutoConfigURL} {
+		encoded, err := syscall.UTF16FromString(text)
+		if err != nil {
+			return errors.New("系统代理设置包含无效字符")
 		}
+		texts[i] = encoded
 	}
-	if err = os.Remove(snapshotPath(directory)); err != nil && !os.IsNotExist(err) {
-		return err
+	options := []internetOption{
+		{option: 1, value: uint64(settings.Flags)},
+		{option: 2, value: uint64(uintptr(unsafe.Pointer(&texts[0][0])))},
+		{option: 3, value: uint64(uintptr(unsafe.Pointer(&texts[1][0])))},
+		{option: 4, value: uint64(uintptr(unsafe.Pointer(&texts[2][0])))},
+	}
+	list := internetOptionList{count: uint32(len(options)), options: &options[0]}
+	list.size = uint32(unsafe.Sizeof(list))
+	ok, _, err := internetSetOption.Call(0, 75, uintptr(unsafe.Pointer(&list)), uintptr(list.size))
+	runtime.KeepAlive(options)
+	runtime.KeepAlive(texts)
+	if ok == 0 {
+		return internetError("设置", err)
+	}
+	// Notify WinINet consumers and refresh their cached settings.
+	for _, option := range []uintptr{39, 37} {
+		ok, _, err = internetSetOption.Call(0, option, 0, 0)
+		if ok == 0 {
+			return internetError("刷新", err)
+		}
 	}
 	return nil
+}
+
+func inspectSystemProxy() (*systemProxyState, error) {
+	return inspectWindowsSystemProxy(nativeWindowsProxy)
+}
+func (s *systemProxyState) enable(directory string, port int) error {
+	return s.enableWindowsProxy(directory, port, nativeWindowsProxy)
+}
+func (s *systemProxyState) restore(directory string) error {
+	return s.restoreWindowsProxy(directory, nativeWindowsProxy)
 }
 func trustCertificate(path string) error {
 	_, err := commandRunner("certutil.exe", "-user", "-addstore", "Root", path)

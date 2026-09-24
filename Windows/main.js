@@ -10,16 +10,19 @@ const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
 const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const extract = require('extract-zip');
 const QRCode = require('qrcode');
 const core = require('./core');
 const updateCore = require('./update-core');
+const { UpdateNetwork } = require('./update-network');
 const updateFiles = require('./update-files');
 const { WeChatCapture } = require('./wechat-capture');
 const { showStartupNotice } = require('./startup-notice');
 const updateIO = updateFiles.fs.promises;
 
 const APP_VERSION = require('./package.json').version;
+const updateNetwork = new UpdateNetwork({ fetch: (...args) => net.fetch(...args), userAgent: `BiliFetch-Windows/${APP_VERSION}` });
 const APP_DISPLAY_NAME = '记住你宇哥';
 // Keep the pre-rename data and Chromium session directories. Changing the
 // display name must not move settings, cookies, capture keys or unfinished jobs.
@@ -210,36 +213,45 @@ function downloadFile(url, destination, label, onProgress = null) {
   });
 }
 
-async function downloadFileWithSystemProxy(url, destination, label, onProgress) {
-  const response = await net.fetch(url, {
-    cache: 'no-store',
-    headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}` }
-  });
-  if (!response.ok || !response.body) throw new Error(`${label} 下载失败（HTTP ${response.status}）`);
-  const total = Number(response.headers.get('content-length')) || 0;
-  let received = 0;
-  const input = Readable.fromWeb(response.body);
-  const output = fs.createWriteStream(destination);
-  input.on('data', (chunk) => {
-    received += chunk.length;
-    onProgress({ label, percent: total ? Math.round(received / total * 100) : null, received, total });
-  });
-  await new Promise((resolve, reject) => {
-    input.once('error', reject);
-    output.once('error', reject);
-    output.once('finish', resolve);
-    input.pipe(output);
-  });
+async function downloadFileWithSystemProxy(url, destination, label, onProgress, headers = {}) {
+  const controller = new AbortController();
+  let timer;
+  const armTimeout = (milliseconds) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error('更新下载连接超时，请稍后重试。')), milliseconds);
+  };
+  armTimeout(10000);
+  try {
+    const response = await net.fetch(url, {
+      signal: controller.signal, cache: 'no-store',
+      headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}`, ...headers }
+    });
+    if (!response.ok || !response.body) {
+      await response.body?.cancel();
+      throw new Error(`${label} 下载失败（HTTP ${response.status}）`);
+    }
+    const total = Number(response.headers.get('content-length')) || 0;
+    let received = 0;
+    const input = Readable.fromWeb(response.body);
+    armTimeout(30000);
+    input.on('data', (chunk) => {
+      armTimeout(30000);
+      received += chunk.length;
+      onProgress({ label, percent: total ? Math.round(received / total * 100) : null, received, total });
+    });
+    await pipeline(input, fs.createWriteStream(destination), { signal: controller.signal });
+  } finally { clearTimeout(timer); }
 }
 
-async function downloadUpdateFile(url, destination, label, onProgress) {
+async function downloadUpdateSource(source, destination, label, onProgress) {
+  const { url, headers, officialAPI } = source;
   const tools = await locateTools();
-  if (tools.aria2) {
+  if (tools.aria2 && !officialAPI) {
     const argumentsList = [
       '--allow-overwrite=true', '--auto-file-renaming=false', '--continue=true',
       '--file-allocation=none', '--max-connection-per-server=8', '--split=8',
-      '--min-split-size=1M', '--max-tries=3', '--retry-wait=2',
-      '--connect-timeout=20', '--timeout=30', '--summary-interval=1',
+      '--min-split-size=1M', '--max-tries=1', '--retry-wait=1',
+      '--connect-timeout=10', '--timeout=20', '--summary-interval=1',
       '--show-console-readout=true', '--console-log-level=warn', '--enable-color=false',
       `--user-agent=BiliFetch-Windows/${APP_VERSION}`,
       `--dir=${path.dirname(destination)}`, `--out=${path.basename(destination)}`,
@@ -262,7 +274,7 @@ async function downloadUpdateFile(url, destination, label, onProgress) {
       onProgress({ label: '多连接下载不可用，正在切换标准下载', percent: null });
     }
   }
-  await downloadFileWithSystemProxy(url, destination, label, onProgress);
+  await downloadFileWithSystemProxy(url, destination, label, onProgress, headers);
 }
 
 async function findFile(root, fileName) {
@@ -799,13 +811,7 @@ class AppUpdater {
     let lastError = null;
     for (const url of sources) {
       try {
-        const response = await net.fetch(url, {
-          signal: AbortSignal.timeout(20000),
-          cache: 'no-store',
-          headers: { 'User-Agent': `BiliFetch-Windows/${APP_VERSION}`, Accept: 'application/json' }
-        });
-        if (!response.ok) throw new Error(`更新服务器返回 HTTP ${response.status}`);
-        const release = updateCore.validateManifest(await response.json(), APP_VERSION);
+        const release = await updateNetwork.manifest(url, payload => updateCore.validateManifest(payload, APP_VERSION));
         const result = {
           configured: true,
           available: updateCore.compareVersions(release.version, APP_VERSION) > 0,
@@ -816,7 +822,7 @@ class AppUpdater {
         return result;
       } catch (error) { lastError = error; }
     }
-    throw lastError || new Error('暂时无法连接更新服务器。');
+    throw new Error(`暂时无法连接更新服务器，已尝试现有更新通道。请稍后重试，或手动下载完整安装包。${lastError ? `（${lastError.message}）` : ''}`);
   }
 
   async download(release = this.available) {
@@ -855,18 +861,24 @@ class AppUpdater {
     const archive = path.join(updateDir, asset.kind === 'delta' ? 'BiliFetch-delta-update.zip' : 'BiliFetch-full-update.zip');
     const extracted = path.join(updateDir, asset.kind === 'delta' ? 'delta-extracted' : 'full-extracted');
     const label = asset.kind === 'delta' ? '增量应用更新' : '完整应用更新';
-    await downloadUpdateFile(asset.url, archive, label, (progress) => send('update:progress', progress));
-    send('update:progress', { label: `正在校验${label}`, percent: null });
-    const digest = await updateFiles.sha256File(archive);
-    if (digest !== asset.sha256) {
+    await updateNetwork.withFallback(asset.url, async (source) => {
       await updateIO.rm(archive, { force: true });
-      throw new Error('更新包 SHA-256 校验失败，已删除可疑文件。');
-    }
+      await updateIO.rm(`${archive}.aria2`, { force: true });
+      const routeLabel = source.officialAPI ? `${label} · 官方备用通道` : label;
+      send('update:progress', { label: routeLabel, percent: null });
+      await downloadUpdateSource(source, archive, routeLabel, (progress) => send('update:progress', progress));
+      send('update:progress', { label: `正在校验${label}`, percent: null });
+      const digest = await updateFiles.sha256File(archive);
+      if (digest !== asset.sha256) {
+        await updateIO.rm(archive, { force: true });
+        throw new Error('更新包 SHA-256 校验失败，已删除可疑文件。');
+      }
+    });
     send('update:progress', { label: `正在解压${label}`, percent: null });
     await updateFiles.extractArchive(archive, extracted);
     if (asset.kind === 'delta') return this.stageDelta(extracted, release, updateDir);
-    const executable = await updateFiles.findFile(extracted, 'BiliFetch.exe');
-    if (!executable) throw new Error('更新包中没有找到 BiliFetch.exe。');
+    const executable = await updateFiles.findFile(extracted, '记住你宇哥.exe') || await updateFiles.findFile(extracted, 'BiliFetch.exe');
+    if (!executable) throw new Error('更新包中没有找到有效的应用程序。');
     return path.dirname(executable);
   }
 

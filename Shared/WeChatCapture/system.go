@@ -20,11 +20,12 @@ type proxyEntry struct {
 	Authenticated bool
 }
 type systemProxyState struct {
-	Port          int                        `json:"port"`
-	Entries       []proxyEntry               `json:"entries,omitempty"`
-	Windows       map[string]json.RawMessage `json:"windows,omitempty"`
-	UpstreamHTTP  string                     `json:"upstreamHTTP,omitempty"`
-	UpstreamHTTPS string                     `json:"upstreamHTTPS,omitempty"`
+	Port            int                        `json:"port"`
+	Entries         []proxyEntry               `json:"entries,omitempty"`
+	Windows         map[string]json.RawMessage `json:"windows,omitempty"`
+	WindowsInternet *windowsInternetSettings   `json:"windowsInternet,omitempty"`
+	UpstreamHTTP    string                     `json:"upstreamHTTP,omitempty"`
+	UpstreamHTTPS   string                     `json:"upstreamHTTPS,omitempty"`
 }
 
 var commandRunner = func(name string, args ...string) (string, error) {
